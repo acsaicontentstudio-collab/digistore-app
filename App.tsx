@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { Product, StoreSettings, CartItem, PaymentMethod, User, Voucher, Affiliate } from './types';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Product, StoreSettings, CartItem, PaymentMethod, User, Voucher, Affiliate, Order } from './types';
 import { DataService } from './services/dataService';
 import AdminSidebar from './components/AdminSidebar';
 
@@ -11,7 +12,7 @@ create extension if not exists "uuid-ossp";
 
 -- Create Products Table
 create table if not exists products (
-  id uuid default uuid_generate_v4() primary key,
+  id text primary key,
   name text not null,
   category text,
   description text,
@@ -25,7 +26,7 @@ create table if not exists products (
 
 -- Create Store Settings Table
 create table if not exists store_settings (
-  id uuid default uuid_generate_v4() primary key,
+  id text primary key,
   store_name text,
   address text,
   whatsapp text,
@@ -40,7 +41,7 @@ create table if not exists store_settings (
 
 -- Create Payment Methods Table
 create table if not exists payment_methods (
-  id uuid default uuid_generate_v4() primary key,
+  id text primary key,
   type text not null,
   name text not null,
   account_number text,
@@ -53,7 +54,7 @@ create table if not exists payment_methods (
 
 -- Create Vouchers Table
 create table if not exists vouchers (
-  id uuid default uuid_generate_v4() primary key,
+  id text primary key,
   code text not null unique,
   type text not null check (type in ('FIXED', 'PERCENT')),
   value numeric not null,
@@ -63,7 +64,7 @@ create table if not exists vouchers (
 
 -- Create Affiliates Table
 create table if not exists affiliates (
-  id uuid default uuid_generate_v4() primary key,
+  id text primary key,
   name text not null,
   code text not null unique,
   password text not null,
@@ -76,7 +77,7 @@ create table if not exists affiliates (
 
 -- Create Orders Table
 create table if not exists orders (
-  id uuid default uuid_generate_v4() primary key,
+  id text primary key,
   customer_name text,
   customer_whatsapp text,
   total numeric not null,
@@ -97,16 +98,16 @@ alter table affiliates enable row level security;
 alter table orders enable row level security;
 
 -- Create Policies (Open access for simplicity in this demo, adjust for production)
-create policy "Public Access Products" on products for all using (true);
-create policy "Public Access Settings" on store_settings for all using (true);
-create policy "Public Access Payments" on payment_methods for all using (true);
-create policy "Public Access Vouchers" on vouchers for all using (true);
-create policy "Public Access Affiliates" on affiliates for all using (true);
-create policy "Public Access Orders" on orders for all using (true);
+create policy "Public Access Products" on products for all using (true) with check (true);
+create policy "Public Access Settings" on store_settings for all using (true) with check (true);
+create policy "Public Access Payments" on payment_methods for all using (true) with check (true);
+create policy "Public Access Vouchers" on vouchers for all using (true) with check (true);
+create policy "Public Access Affiliates" on affiliates for all using (true) with check (true);
+create policy "Public Access Orders" on orders for all using (true) with check (true);
 
--- Initial Data
-insert into store_settings (store_name, address, whatsapp, email, description)
-values ('DigiStore Pro', 'Jl. Digital No. 1', '6281234567890', 'admin@digistore.com', 'Toko produk digital terpercaya.');
+-- Initial Data (Optional - run only if empty)
+-- insert into store_settings (id, store_name, address, whatsapp, email, description)
+-- values ('default_settings', 'DigiStore Pro', 'Jl. Digital No. 1', '6281234567890', 'admin@digistore.com', 'Toko produk digital terpercaya.');
 `;
 
 // --- Context & State ---
@@ -427,7 +428,6 @@ const AdminVouchers: React.FC = () => {
           </table>
         </div>
       </div>
-      {/* Modal removed for brevity, same logic as Products */}
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="bg-dark-800 rounded-xl p-6 w-full max-w-md border border-dark-700 shadow-2xl">
@@ -569,7 +569,7 @@ const AdminSettings: React.FC = () => {
 const AdminDatabase: React.FC = () => {
   const { settings, updateSettings } = useAppContext();
   const [formData, setFormData] = useState(settings);
-  const [showSql, setShowSql] = useState(false);
+  const [showSql, setShowSql] = useState(!settings.supabaseUrl); // Auto show if no URL
 
   return (
     <div className="p-6 pb-24 max-w-4xl mx-auto">
@@ -583,7 +583,7 @@ const AdminDatabase: React.FC = () => {
                <div className="mt-4"><button onClick={() => setShowSql(!showSql)} className="text-primary text-sm font-bold"> {showSql ? 'Hide SQL' : 'Show SQL Schema'} </button>{showSql && <textarea readOnly value={SUPABASE_SCHEMA} className="w-full h-64 bg-dark-900 border border-dark-700 rounded-lg p-4 mt-2 text-xs font-mono text-gray-300" />}</div>
             </div>
           </div>
-          <button onClick={() => { updateSettings(formData); alert('Saved'); }} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan</button>
+          <button onClick={() => { updateSettings(formData); alert('Saved. Please refresh to sync with database.'); }} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan</button>
        </div>
     </div>
   );
@@ -996,11 +996,106 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [referralCode, setReferralCode] = useState<string | null>(null);
 
-  useEffect(() => { DataService.saveSettings(settings); }, [settings]);
-  useEffect(() => { DataService.saveProducts(products); }, [products]);
+  // Initialize Supabase Client if credentials exist
+  const supabase = useMemo(() => {
+    if (settings.supabaseUrl && settings.supabaseKey) {
+      try {
+        return createClient(settings.supabaseUrl, settings.supabaseKey);
+      } catch (e) {
+        console.error("Supabase Init Failed:", e);
+        return null;
+      }
+    }
+    return null;
+  }, [settings.supabaseUrl, settings.supabaseKey]);
+
+  // Initial Sync from Supabase
+  useEffect(() => {
+    if (!supabase) return;
+
+    const fetchData = async () => {
+      console.log("Fetching from Supabase...");
+      
+      const { data: prodData } = await supabase.from('products').select('*');
+      if (prodData && prodData.length > 0) {
+        const mappedProducts: Product[] = prodData.map((p: any) => ({
+          id: p.id, name: p.name, category: p.category, description: p.description, price: Number(p.price),
+          discountPrice: p.discount_price ? Number(p.discount_price) : undefined,
+          image: p.image, fileUrl: p.file_url, isPopular: p.is_popular
+        }));
+        setProducts(mappedProducts);
+      }
+
+      const { data: vouchData } = await supabase.from('vouchers').select('*');
+      if (vouchData && vouchData.length > 0) {
+        const mappedVouchers: Voucher[] = vouchData.map((v: any) => ({
+          id: v.id, code: v.code, type: v.type, value: Number(v.value), isActive: v.is_active
+        }));
+        setVouchers(mappedVouchers);
+      }
+      
+      const { data: affData } = await supabase.from('affiliates').select('*');
+      if (affData && affData.length > 0) {
+        const mappedAff: Affiliate[] = affData.map((a: any) => ({
+          id: a.id, name: a.name, code: a.code, password: a.password,
+          commissionRate: Number(a.commission_rate), totalEarnings: Number(a.total_earnings),
+          bankDetails: a.bank_details, isActive: a.is_active
+        }));
+        setAffiliates(mappedAff);
+      }
+
+      // Sync Settings (only if ID exists)
+      // Note: Settings usually single row, simple logic here
+    };
+
+    fetchData();
+  }, [supabase]);
+
+  // Sync TO Supabase (Upsert logic)
+  // We use a debounce-like approach or just direct effects. 
+  // Warning: Base64 images are heavy for Supabase rows. Ideally use Storage, but keeping simple as requested.
+  
+  useEffect(() => { 
+    DataService.saveSettings(settings); 
+    // Settings sync skipped for simplicity to avoid loop, assumes local first
+  }, [settings]);
+
+  useEffect(() => { 
+    DataService.saveProducts(products);
+    if (supabase && products.length > 0) {
+      // Map back to snake_case for DB
+      const dbProducts = products.map(p => ({
+        id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
+        discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
+      }));
+      supabase.from('products').upsert(dbProducts).then(({error}) => {
+        if(error) console.error("Product Sync Error:", error);
+      });
+    }
+  }, [products, supabase]);
+
   useEffect(() => { DataService.savePayments(paymentMethods); }, [paymentMethods]);
-  useEffect(() => { DataService.saveVouchers(vouchers); }, [vouchers]);
-  useEffect(() => { DataService.saveAffiliates(affiliates); }, [affiliates]);
+
+  useEffect(() => { 
+    DataService.saveVouchers(vouchers);
+    if (supabase && vouchers.length > 0) {
+      const dbVouchers = vouchers.map(v => ({
+        id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
+      }));
+      supabase.from('vouchers').upsert(dbVouchers).then(({error}) => { if(error) console.error(error); });
+    }
+  }, [vouchers, supabase]);
+
+  useEffect(() => { 
+    DataService.saveAffiliates(affiliates);
+    if (supabase && affiliates.length > 0) {
+      const dbAffs = affiliates.map(a => ({
+        id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
+        total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
+      }));
+      supabase.from('affiliates').upsert(dbAffs).then(({error}) => { if(error) console.error(error); });
+    }
+  }, [affiliates, supabase]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
