@@ -39,8 +39,9 @@ export interface CartItem extends Product {
 }
 
 export interface User {
-  role: 'ADMIN' | 'CUSTOMER';
+  role: 'ADMIN' | 'CUSTOMER' | 'AFFILIATE';
   name: string;
+  id?: string; // Used for affiliate linking
 }
 
 export interface Voucher {
@@ -62,4 +63,15 @@ export interface Order {
   date: string;
   voucherCode?: string;
   discountAmount?: number;
+}
+
+export interface Affiliate {
+  id: string;
+  name: string;
+  code: string; // Unique referral code
+  password: string; // Simple auth
+  commissionRate: number; // Percentage (e.g., 10 for 10%)
+  totalEarnings: number;
+  bankDetails: string; // Rekening untuk transfer komisi
+  isActive: boolean;
 }

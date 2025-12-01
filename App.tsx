@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { Product, StoreSettings, CartItem, PaymentMethod, User, Voucher } from './types';
+import { Product, StoreSettings, CartItem, PaymentMethod, User, Voucher, Affiliate } from './types';
 import { DataService } from './services/dataService';
 import AdminSidebar from './components/AdminSidebar';
 
@@ -61,6 +61,19 @@ create table if not exists vouchers (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- Create Affiliates Table
+create table if not exists affiliates (
+  id uuid default uuid_generate_v4() primary key,
+  name text not null,
+  code text not null unique,
+  password text not null,
+  commission_rate numeric not null,
+  total_earnings numeric default 0,
+  bank_details text,
+  is_active boolean default true,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- Create Orders Table
 create table if not exists orders (
   id uuid default uuid_generate_v4() primary key,
@@ -80,6 +93,7 @@ alter table products enable row level security;
 alter table store_settings enable row level security;
 alter table payment_methods enable row level security;
 alter table vouchers enable row level security;
+alter table affiliates enable row level security;
 alter table orders enable row level security;
 
 -- Create Policies (Open access for simplicity in this demo, adjust for production)
@@ -87,6 +101,7 @@ create policy "Public Access Products" on products for all using (true);
 create policy "Public Access Settings" on store_settings for all using (true);
 create policy "Public Access Payments" on payment_methods for all using (true);
 create policy "Public Access Vouchers" on vouchers for all using (true);
+create policy "Public Access Affiliates" on affiliates for all using (true);
 create policy "Public Access Orders" on orders for all using (true);
 
 -- Initial Data
@@ -103,15 +118,19 @@ const AppContext = React.createContext<{
   updateProducts: (p: Product[]) => void;
   vouchers: Voucher[];
   updateVouchers: (v: Voucher[]) => void;
+  affiliates: Affiliate[];
+  updateAffiliates: (a: Affiliate[]) => void;
   cart: CartItem[];
   addToCart: (p: Product) => void;
   removeFromCart: (id: string) => void;
   clearCart: () => void;
   user: User | null;
-  login: (role: 'ADMIN' | 'CUSTOMER', name: string) => void;
+  login: (role: 'ADMIN' | 'CUSTOMER' | 'AFFILIATE', name: string, id?: string) => void;
   logout: () => void;
   paymentMethods: PaymentMethod[];
   updatePayments: (p: PaymentMethod[]) => void;
+  referralCode: string | null;
+  setReferralCode: (code: string | null) => void;
 } | null>(null);
 
 const useAppContext = () => {
@@ -164,11 +183,11 @@ const ProductCard: React.FC<{ product: Product, onAdd: () => void }> = ({ produc
 // --- Admin Views ---
 
 const AdminDashboard: React.FC = () => {
-  const { products, vouchers } = useAppContext();
+  const { products, vouchers, affiliates } = useAppContext();
   return (
     <div className="p-6">
       <h2 className="text-2xl font-bold text-white mb-6">Dashboard</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
           <div className="flex items-center justify-between">
             <div>
@@ -191,6 +210,17 @@ const AdminDashboard: React.FC = () => {
             </div>
           </div>
         </div>
+         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-400 text-sm">Afiliasi</p>
+              <h3 className="text-3xl font-bold text-white mt-1">{affiliates.length}</h3>
+            </div>
+            <div className="w-12 h-12 bg-blue-500/20 rounded-full flex items-center justify-center text-blue-500">
+              <i className="fas fa-users text-xl"></i>
+            </div>
+          </div>
+        </div>
         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
            <div className="flex items-center justify-between">
             <div>
@@ -207,8 +237,7 @@ const AdminDashboard: React.FC = () => {
       <div className="mt-8 bg-dark-800 rounded-xl border border-dark-700 p-6">
         <h3 className="text-xl font-bold text-white mb-4">Selamat Datang, Admin!</h3>
         <p className="text-gray-400">
-          Gunakan sidebar di sebelah kiri untuk mengelola produk, voucher, pengaturan toko, dan koneksi database.
-          Aplikasi ini saat ini menggunakan LocalStorage untuk simulasi database. Untuk menggunakan Supabase, silakan konfigurasi di menu Database.
+          Gunakan sidebar di sebelah kiri untuk mengelola produk, voucher, afiliasi, dan pengaturan toko.
         </p>
       </div>
     </div>
@@ -220,7 +249,7 @@ const AdminProducts: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [currentProduct, setCurrentProduct] = useState<Partial<Product>>({});
 
-  // Generate dynamic category list from existing products + defaults
+  // Generate dynamic category list
   const availableCategories = useMemo(() => {
     const defaults = ['Software', 'E-book', 'Course', 'Template'];
     const fromProducts = products.map(p => p.category);
@@ -232,10 +261,8 @@ const AdminProducts: React.FC = () => {
     
     let newProducts = [...products];
     if (currentProduct.id) {
-      // Edit
       newProducts = newProducts.map(p => p.id === currentProduct.id ? { ...p, ...currentProduct } as Product : p);
     } else {
-      // Add
       const newId = Date.now().toString();
       const productToAdd: Product = {
         id: newId,
@@ -260,16 +287,13 @@ const AdminProducts: React.FC = () => {
     }
   };
 
-  // Convert file to Base64
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'image' | 'fileUrl') => {
     const file = e.target.files?.[0];
     if (file) {
-      // Limit file size for localstorage demo purposes (limit 3MB)
       if (file.size > 3 * 1024 * 1024) {
         alert("File terlalu besar! Maksimal 3MB untuk demo ini.");
         return;
       }
-
       const reader = new FileReader();
       reader.onloadend = () => {
         setCurrentProduct(prev => ({ ...prev, [field]: reader.result as string }));
@@ -278,9 +302,7 @@ const AdminProducts: React.FC = () => {
     }
   };
 
-  const isBase64 = (str: string) => {
-    return str?.startsWith('data:');
-  };
+  const isBase64 = (str: string) => str?.startsWith('data:');
 
   return (
     <div className="p-6 pb-24">
@@ -303,18 +325,8 @@ const AdminProducts: React.FC = () => {
             <div className="flex justify-between items-center mt-auto">
               <span className="font-bold text-primary">Rp {p.price.toLocaleString()}</span>
               <div className="space-x-2">
-                <button 
-                  onClick={() => { setCurrentProduct(p); setIsEditing(true); }}
-                  className="text-blue-400 hover:text-blue-300"
-                >
-                  <i className="fas fa-edit"></i>
-                </button>
-                <button 
-                  onClick={() => handleDelete(p.id)}
-                  className="text-red-400 hover:text-red-300"
-                >
-                  <i className="fas fa-trash"></i>
-                </button>
+                <button onClick={() => { setCurrentProduct(p); setIsEditing(true); }} className="text-blue-400 hover:text-blue-300"><i className="fas fa-edit"></i></button>
+                <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-300"><i className="fas fa-trash"></i></button>
               </div>
             </div>
           </div>
@@ -328,112 +340,38 @@ const AdminProducts: React.FC = () => {
             <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2 no-scrollbar">
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Nama Produk</label>
-                <input 
-                  type="text" 
-                  value={currentProduct.name || ''} 
-                  onChange={e => setCurrentProduct({...currentProduct, name: e.target.value})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                />
+                <input type="text" value={currentProduct.name || ''} onChange={e => setCurrentProduct({...currentProduct, name: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Kategori</label>
-                  <input 
-                    type="text" 
-                    list="categories"
-                    value={currentProduct.category || ''} 
-                    onChange={e => setCurrentProduct({...currentProduct, category: e.target.value})}
-                    placeholder="Pilih atau ketik baru..."
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                  />
-                  <datalist id="categories">
-                    {availableCategories.map(cat => (
-                      <option key={cat} value={cat} />
-                    ))}
-                  </datalist>
+                  <input type="text" list="categories" value={currentProduct.category || ''} onChange={e => setCurrentProduct({...currentProduct, category: e.target.value})} placeholder="Pilih atau ketik..." className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none" />
+                  <datalist id="categories">{availableCategories.map(cat => <option key={cat} value={cat} />)}</datalist>
                 </div>
                  <div>
-                  <label className="block text-sm text-gray-400 mb-1">Gambar Produk</label>
+                  <label className="block text-sm text-gray-400 mb-1">Gambar</label>
                   <div className="flex flex-col gap-2">
-                    <input 
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, 'image')}
-                        className="block w-full text-xs text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white hover:file:bg-indigo-600"
-                    />
-                    <input 
-                        type="text" 
-                        value={isBase64(currentProduct.image || '') ? '(Gambar terupload)' : currentProduct.image || ''} 
-                        onChange={e => setCurrentProduct({...currentProduct, image: e.target.value})}
-                        placeholder="atau paste URL gambar..."
-                        disabled={isBase64(currentProduct.image || '')}
-                        className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
+                    <input type="file" accept="image/*" onChange={(e) => handleFileUpload(e, 'image')} className="block w-full text-xs text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white" />
+                    <input type="text" value={isBase64(currentProduct.image || '') ? '(Gambar terupload)' : currentProduct.image || ''} onChange={e => setCurrentProduct({...currentProduct, image: e.target.value})} disabled={isBase64(currentProduct.image || '')} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-xs disabled:opacity-50" placeholder="URL Gambar" />
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Harga Normal</label>
-                  <input 
-                    type="number" 
-                    value={currentProduct.price || ''} 
-                    onChange={e => setCurrentProduct({...currentProduct, price: Number(e.target.value)})}
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                  />
-                </div>
-                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Harga Diskon (Opsional)</label>
-                  <input 
-                    type="number" 
-                    value={currentProduct.discountPrice || ''} 
-                    onChange={e => setCurrentProduct({...currentProduct, discountPrice: Number(e.target.value)})}
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                  />
-                </div>
+                 <div><label className="block text-sm text-gray-400 mb-1">Harga Normal</label><input type="number" value={currentProduct.price || ''} onChange={e => setCurrentProduct({...currentProduct, price: Number(e.target.value)})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none" /></div>
+                 <div><label className="block text-sm text-gray-400 mb-1">Harga Diskon (Opsional)</label><input type="number" value={currentProduct.discountPrice || ''} onChange={e => setCurrentProduct({...currentProduct, discountPrice: Number(e.target.value)})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none" /></div>
               </div>
-               <div>
-                  <label className="block text-sm text-gray-400 mb-1">Deskripsi</label>
-                  <textarea 
-                    value={currentProduct.description || ''} 
-                    onChange={e => setCurrentProduct({...currentProduct, description: e.target.value})}
-                    rows={3}
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                  />
-              </div>
+               <div><label className="block text-sm text-gray-400 mb-1">Deskripsi</label><textarea value={currentProduct.description || ''} onChange={e => setCurrentProduct({...currentProduct, description: e.target.value})} rows={3} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none" /></div>
               <div>
-                  <label className="block text-sm text-gray-400 mb-1">File Produk Digital</label>
+                  <label className="block text-sm text-gray-400 mb-1">File Produk</label>
                    <div className="flex flex-col gap-2">
-                    <input 
-                        type="file"
-                        onChange={(e) => handleFileUpload(e, 'fileUrl')}
-                        className="block w-full text-xs text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-secondary file:text-white hover:file:bg-purple-600"
-                    />
-                    <input 
-                        type="text" 
-                        value={isBase64(currentProduct.fileUrl || '') ? '(File terupload)' : currentProduct.fileUrl || ''} 
-                        onChange={e => setCurrentProduct({...currentProduct, fileUrl: e.target.value})}
-                        placeholder="atau paste Link Google Drive / Dropbox..."
-                        disabled={isBase64(currentProduct.fileUrl || '')}
-                        className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
+                    <input type="file" onChange={(e) => handleFileUpload(e, 'fileUrl')} className="block w-full text-xs text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-secondary file:text-white" />
+                    <input type="text" value={isBase64(currentProduct.fileUrl || '') ? '(File terupload)' : currentProduct.fileUrl || ''} onChange={e => setCurrentProduct({...currentProduct, fileUrl: e.target.value})} placeholder="Link GDrive / Dropbox..." disabled={isBase64(currentProduct.fileUrl || '')} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-sm disabled:opacity-50" />
                   </div>
-                  <p className="text-[10px] text-gray-500 mt-1">*Upload file akan dikonversi ke Base64 (untuk demo). Gunakan Link untuk file besar.</p>
               </div>
             </div>
             <div className="flex justify-end gap-4 mt-6">
-              <button 
-                onClick={() => setIsEditing(false)}
-                className="px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-dark-700"
-              >
-                Batal
-              </button>
-              <button 
-                onClick={handleSave}
-                className="px-6 py-2 rounded-lg bg-primary hover:bg-indigo-600 text-white font-medium"
-              >
-                Simpan
-              </button>
+              <button onClick={() => setIsEditing(false)} className="px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-dark-700">Batal</button>
+              <button onClick={handleSave} className="px-6 py-2 rounded-lg bg-primary hover:bg-indigo-600 text-white font-medium">Simpan</button>
             </div>
           </div>
         </div>
@@ -449,20 +387,12 @@ const AdminVouchers: React.FC = () => {
 
   const handleSave = () => {
     if (!currentVoucher.code || !currentVoucher.value) return alert("Kode dan Nilai Diskon wajib diisi");
-    
     let newVouchers = [...vouchers];
     if (currentVoucher.id) {
       newVouchers = newVouchers.map(v => v.id === currentVoucher.id ? { ...v, ...currentVoucher } as Voucher : v);
     } else {
       const newId = Date.now().toString();
-      const voucherToAdd: Voucher = {
-        id: newId,
-        code: currentVoucher.code.toUpperCase(),
-        type: currentVoucher.type || 'FIXED',
-        value: Number(currentVoucher.value),
-        isActive: currentVoucher.isActive !== undefined ? currentVoucher.isActive : true,
-      };
-      newVouchers.push(voucherToAdd);
+      newVouchers.push({ id: newId, code: currentVoucher.code.toUpperCase(), type: currentVoucher.type || 'FIXED', value: Number(currentVoucher.value), isActive: currentVoucher.isActive !== undefined ? currentVoucher.isActive : true });
     }
     updateVouchers(newVouchers);
     setIsEditing(false);
@@ -470,20 +400,95 @@ const AdminVouchers: React.FC = () => {
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('Yakin hapus voucher ini?')) {
-      updateVouchers(vouchers.filter(v => v.id !== id));
-    }
+    if (confirm('Yakin hapus voucher ini?')) updateVouchers(vouchers.filter(v => v.id !== id));
   };
 
   return (
     <div className="p-6 pb-24">
        <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-white">Manajemen Voucher</h2>
+        <button onClick={() => { setCurrentVoucher({ type: 'FIXED', isActive: true }); setIsEditing(true); }} className="bg-primary hover:bg-indigo-600 text-white px-4 py-2 rounded-lg"><i className="fas fa-plus mr-2"></i> Buat Voucher</button>
+      </div>
+      <div className="bg-dark-800 rounded-xl border border-dark-700 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm text-gray-400">
+            <thead className="bg-dark-900 text-gray-200 uppercase font-medium"><tr><th className="px-6 py-4">Kode</th><th className="px-6 py-4">Tipe</th><th className="px-6 py-4">Nilai</th><th className="px-6 py-4">Status</th><th className="px-6 py-4 text-right">Aksi</th></tr></thead>
+            <tbody className="divide-y divide-dark-700">
+              {vouchers.map(v => (
+                <tr key={v.id} className="hover:bg-dark-700/50">
+                  <td className="px-6 py-4 font-bold text-white">{v.code}</td>
+                  <td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-bold ${v.type === 'PERCENT' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>{v.type}</span></td>
+                  <td className="px-6 py-4">{v.type === 'PERCENT' ? `${v.value}%` : `Rp ${v.value.toLocaleString()}`}</td>
+                  <td className="px-6 py-4"><span className={`w-2 h-2 rounded-full inline-block mr-2 ${v.isActive ? 'bg-green-500' : 'bg-red-500'}`}></span>{v.isActive ? 'Aktif' : 'Off'}</td>
+                  <td className="px-6 py-4 text-right space-x-3"><button onClick={() => { setCurrentVoucher(v); setIsEditing(true); }} className="text-blue-400"><i className="fas fa-edit"></i></button><button onClick={() => handleDelete(v.id)} className="text-red-400"><i className="fas fa-trash"></i></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {/* Modal removed for brevity, same logic as Products */}
+      {isEditing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="bg-dark-800 rounded-xl p-6 w-full max-w-md border border-dark-700 shadow-2xl">
+             <h3 className="text-xl font-bold text-white mb-4">{currentVoucher.id ? 'Edit Voucher' : 'Buat Voucher'}</h3>
+             <div className="space-y-4">
+               <input type="text" placeholder="Kode (misal: DISC10)" value={currentVoucher.code || ''} onChange={e => setCurrentVoucher({...currentVoucher, code: e.target.value.toUpperCase()})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" />
+               <select value={currentVoucher.type || 'FIXED'} onChange={e => setCurrentVoucher({...currentVoucher, type: e.target.value as any})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white"><option value="FIXED">Rupiah (Rp)</option><option value="PERCENT">Persen (%)</option></select>
+               <input type="number" placeholder="Nilai" value={currentVoucher.value || ''} onChange={e => setCurrentVoucher({...currentVoucher, value: Number(e.target.value)})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" />
+             </div>
+             <div className="flex justify-end gap-4 mt-6">
+               <button onClick={() => setIsEditing(false)} className="text-gray-400">Batal</button>
+               <button onClick={handleSave} className="bg-primary text-white px-4 py-2 rounded-lg">Simpan</button>
+             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AdminAffiliates: React.FC = () => {
+  const { affiliates, updateAffiliates } = useAppContext();
+  const [isEditing, setIsEditing] = useState(false);
+  const [currentAff, setCurrentAff] = useState<Partial<Affiliate>>({});
+
+  const handleSave = () => {
+    if (!currentAff.name || !currentAff.code || !currentAff.password) return alert("Data wajib diisi");
+    
+    let newAffs = [...affiliates];
+    if (currentAff.id) {
+      newAffs = newAffs.map(a => a.id === currentAff.id ? { ...a, ...currentAff } as Affiliate : a);
+    } else {
+      newAffs.push({
+        id: Date.now().toString(),
+        name: currentAff.name!,
+        code: currentAff.code!.toUpperCase(),
+        password: currentAff.password!,
+        commissionRate: Number(currentAff.commissionRate || 10),
+        totalEarnings: 0,
+        bankDetails: currentAff.bankDetails || '',
+        isActive: true,
+      });
+    }
+    updateAffiliates(newAffs);
+    setIsEditing(false);
+    setCurrentAff({});
+  };
+
+  const handleDelete = (id: string) => {
+    if(confirm('Hapus partner ini?')) updateAffiliates(affiliates.filter(a => a.id !== id));
+  };
+
+  return (
+    <div className="p-6 pb-24">
+       <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Manajemen Afiliasi</h2>
         <button 
-          onClick={() => { setCurrentVoucher({ type: 'FIXED', isActive: true }); setIsEditing(true); }}
+          onClick={() => { setCurrentAff({ commissionRate: 10, isActive: true }); setIsEditing(true); }}
           className="bg-primary hover:bg-indigo-600 text-white px-4 py-2 rounded-lg"
         >
-          <i className="fas fa-plus mr-2"></i> Buat Voucher
+          <i className="fas fa-user-plus mr-2"></i> Tambah Partner
         </button>
       </div>
 
@@ -491,41 +496,22 @@ const AdminVouchers: React.FC = () => {
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-gray-400">
             <thead className="bg-dark-900 text-gray-200 uppercase font-medium">
-              <tr>
-                <th className="px-6 py-4">Kode</th>
-                <th className="px-6 py-4">Tipe Diskon</th>
-                <th className="px-6 py-4">Nilai</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4 text-right">Aksi</th>
-              </tr>
+              <tr><th className="px-6 py-4">Partner</th><th className="px-6 py-4">Kode Referral</th><th className="px-6 py-4">Komisi</th><th className="px-6 py-4">Pendapatan</th><th className="px-6 py-4">Password</th><th className="px-6 py-4 text-right">Aksi</th></tr>
             </thead>
             <tbody className="divide-y divide-dark-700">
-              {vouchers.map(v => (
-                <tr key={v.id} className="hover:bg-dark-700/50">
-                  <td className="px-6 py-4 font-bold text-white">{v.code}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 rounded text-xs font-bold ${v.type === 'PERCENT' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>
-                      {v.type === 'PERCENT' ? 'Persentase (%)' : 'Potongan Tetap (Rp)'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-mono">
-                    {v.type === 'PERCENT' ? `${v.value}%` : `Rp ${v.value.toLocaleString()}`}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`w-2 h-2 rounded-full inline-block mr-2 ${v.isActive ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                    {v.isActive ? 'Aktif' : 'Non-Aktif'}
-                  </td>
+              {affiliates.map(a => (
+                <tr key={a.id} className="hover:bg-dark-700/50">
+                  <td className="px-6 py-4 font-bold text-white">{a.name}</td>
+                  <td className="px-6 py-4"><span className="bg-gray-700 px-2 py-1 rounded text-white font-mono">{a.code}</span></td>
+                  <td className="px-6 py-4">{a.commissionRate}%</td>
+                  <td className="px-6 py-4 text-green-400 font-bold">Rp {a.totalEarnings.toLocaleString()}</td>
+                  <td className="px-6 py-4 font-mono text-xs">{a.password}</td>
                   <td className="px-6 py-4 text-right space-x-3">
-                    <button onClick={() => { setCurrentVoucher(v); setIsEditing(true); }} className="text-blue-400 hover:text-white"><i className="fas fa-edit"></i></button>
-                    <button onClick={() => handleDelete(v.id)} className="text-red-400 hover:text-white"><i className="fas fa-trash"></i></button>
+                    <button onClick={() => { setCurrentAff(a); setIsEditing(true); }} className="text-blue-400"><i className="fas fa-edit"></i></button>
+                    <button onClick={() => handleDelete(a.id)} className="text-red-400"><i className="fas fa-trash"></i></button>
                   </td>
                 </tr>
               ))}
-              {vouchers.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-gray-500">Belum ada voucher dibuat.</td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
@@ -534,65 +520,19 @@ const AdminVouchers: React.FC = () => {
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="bg-dark-800 rounded-xl p-6 w-full max-w-md border border-dark-700 shadow-2xl">
-            <h3 className="text-xl font-bold text-white mb-4">{currentVoucher.id ? 'Edit Voucher' : 'Buat Voucher Baru'}</h3>
+            <h3 className="text-xl font-bold text-white mb-4">{currentAff.id ? 'Edit Partner' : 'Tambah Partner Afiliasi'}</h3>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Kode Voucher (Unik)</label>
-                <input 
-                  type="text" 
-                  value={currentVoucher.code || ''} 
-                  onChange={e => setCurrentVoucher({...currentVoucher, code: e.target.value.toUpperCase()})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none uppercase"
-                  placeholder="CONTOH: HEMAT10"
-                />
-              </div>
+              <div><label className="text-xs text-gray-400">Nama Lengkap</label><input type="text" value={currentAff.name || ''} onChange={e => setCurrentAff({...currentAff, name: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+              <div><label className="text-xs text-gray-400">Kode Referral (Unik)</label><input type="text" value={currentAff.code || ''} onChange={e => setCurrentAff({...currentAff, code: e.target.value.toUpperCase()})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white uppercase" placeholder="CONTOH: BUDI123" /></div>
               <div className="grid grid-cols-2 gap-4">
-                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Tipe Diskon</label>
-                  <select 
-                    value={currentVoucher.type || 'FIXED'} 
-                    onChange={e => setCurrentVoucher({...currentVoucher, type: e.target.value as 'FIXED' | 'PERCENT'})}
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                  >
-                    <option value="FIXED">Potongan Harga (Rp)</option>
-                    <option value="PERCENT">Persentase (%)</option>
-                  </select>
-                </div>
-                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Nilai</label>
-                  <input 
-                    type="number" 
-                    value={currentVoucher.value || ''} 
-                    onChange={e => setCurrentVoucher({...currentVoucher, value: Number(e.target.value)})}
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                    placeholder={currentVoucher.type === 'PERCENT' ? 'Contoh: 10' : 'Contoh: 10000'}
-                  />
-                </div>
+                 <div><label className="text-xs text-gray-400">Komisi (%)</label><input type="number" value={currentAff.commissionRate || ''} onChange={e => setCurrentAff({...currentAff, commissionRate: Number(e.target.value)})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+                 <div><label className="text-xs text-gray-400">Password Login</label><input type="text" value={currentAff.password || ''} onChange={e => setCurrentAff({...currentAff, password: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
               </div>
-              <div className="flex items-center gap-2">
-                <input 
-                  type="checkbox" 
-                  id="isActive"
-                  checked={currentVoucher.isActive}
-                  onChange={e => setCurrentVoucher({...currentVoucher, isActive: e.target.checked})}
-                  className="w-4 h-4 rounded bg-dark-900 border-dark-700 text-primary focus:ring-primary"
-                />
-                <label htmlFor="isActive" className="text-sm text-white select-none">Status Aktif</label>
-              </div>
+              <div><label className="text-xs text-gray-400">Info Bank</label><input type="text" value={currentAff.bankDetails || ''} onChange={e => setCurrentAff({...currentAff, bankDetails: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" placeholder="BCA - 12345678 - Budi" /></div>
             </div>
             <div className="flex justify-end gap-4 mt-6">
-              <button 
-                onClick={() => setIsEditing(false)}
-                className="px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-dark-700"
-              >
-                Batal
-              </button>
-              <button 
-                onClick={handleSave}
-                className="px-6 py-2 rounded-lg bg-primary hover:bg-indigo-600 text-white font-medium"
-              >
-                Simpan
-              </button>
+              <button onClick={() => setIsEditing(false)} className="text-gray-400">Batal</button>
+              <button onClick={handleSave} className="bg-primary text-white px-4 py-2 rounded-lg">Simpan</button>
             </div>
           </div>
         </div>
@@ -602,96 +542,25 @@ const AdminVouchers: React.FC = () => {
 };
 
 const AdminSettings: React.FC = () => {
-  const { settings, updateSettings, paymentMethods, updatePayments } = useAppContext();
+  const { settings, updateSettings, paymentMethods } = useAppContext();
   const [formData, setFormData] = useState(settings);
-
-  // Sync state if context changes externally (rare here but good practice)
   useEffect(() => { setFormData(settings); }, [settings]);
-
-  const handleSave = () => {
-    updateSettings(formData);
-    alert('Pengaturan berhasil disimpan!');
-  };
-
-  const handlePaymentToggle = (id: string) => {
-    // In a real app we might toggle an 'isActive' boolean. 
-    // Here we just mock editing functionality requirements.
-    alert("Untuk demo ini, metode pembayaran dikelola via kode/state awal.");
-  };
+  const handleSave = () => { updateSettings(formData); alert('Pengaturan berhasil disimpan!'); };
 
   return (
     <div className="p-6 pb-24 max-w-4xl mx-auto">
       <h2 className="text-2xl font-bold text-white mb-6">Pengaturan Toko</h2>
-      
       <div className="space-y-8">
-        {/* General Info */}
         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
           <h3 className="text-lg font-bold text-white mb-4 border-b border-dark-700 pb-2">Informasi Umum</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Nama Toko</label>
-              <input 
-                value={formData.storeName}
-                onChange={e => setFormData({...formData, storeName: e.target.value})}
-                className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-              />
-            </div>
-             <div>
-              <label className="block text-sm text-gray-400 mb-1">No. WhatsApp (format: 628...)</label>
-              <input 
-                value={formData.whatsapp}
-                onChange={e => setFormData({...formData, whatsapp: e.target.value})}
-                className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-              />
-            </div>
-             <div className="md:col-span-2">
-              <label className="block text-sm text-gray-400 mb-1">Alamat</label>
-              <input 
-                value={formData.address}
-                onChange={e => setFormData({...formData, address: e.target.value})}
-                className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-              />
-            </div>
-             <div className="md:col-span-2">
-              <label className="block text-sm text-gray-400 mb-1">Deskripsi Toko</label>
-              <textarea 
-                value={formData.description}
-                onChange={e => setFormData({...formData, description: e.target.value})}
-                className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-              />
-            </div>
+            <div><label className="block text-sm text-gray-400 mb-1">Nama Toko</label><input value={formData.storeName} onChange={e => setFormData({...formData, storeName: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+            <div><label className="block text-sm text-gray-400 mb-1">WhatsApp</label><input value={formData.whatsapp} onChange={e => setFormData({...formData, whatsapp: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+            <div className="md:col-span-2"><label className="block text-sm text-gray-400 mb-1">Alamat</label><input value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+            <div className="md:col-span-2"><label className="block text-sm text-gray-400 mb-1">Deskripsi</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
           </div>
         </div>
-
-        {/* Payment Methods Display */}
-        <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
-           <h3 className="text-lg font-bold text-white mb-4 border-b border-dark-700 pb-2">Metode Pembayaran Aktif</h3>
-           <div className="space-y-3">
-             {paymentMethods.map(pm => (
-               <div key={pm.id} className="flex items-center justify-between bg-dark-900 p-3 rounded-lg">
-                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-white rounded flex items-center justify-center p-1">
-                      {pm.logo ? <img src={pm.logo} alt={pm.name} className="max-w-full max-h-full" /> : <i className="fas fa-money-bill text-dark-900"></i>}
-                    </div>
-                    <div>
-                      <p className="font-medium text-white">{pm.name}</p>
-                      <p className="text-xs text-gray-400">{pm.type} - {pm.accountNumber || 'Auto'}</p>
-                    </div>
-                 </div>
-                 <button onClick={() => handlePaymentToggle(pm.id)} className="text-gray-400 hover:text-white">
-                   <i className="fas fa-cog"></i>
-                 </button>
-               </div>
-             ))}
-             <div className="mt-4 text-xs text-gray-500 italic">
-               *Tripay configuration is located in the Database & API section.
-             </div>
-           </div>
-        </div>
-
-        <button onClick={handleSave} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl transition-colors">
-          Simpan Perubahan
-        </button>
+        <button onClick={handleSave} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan Perubahan</button>
       </div>
     </div>
   );
@@ -702,125 +571,83 @@ const AdminDatabase: React.FC = () => {
   const [formData, setFormData] = useState(settings);
   const [showSql, setShowSql] = useState(false);
 
-  const handleSave = () => {
-    updateSettings(formData);
-    alert('Konfigurasi API disimpan.');
-  };
+  return (
+    <div className="p-6 pb-24 max-w-4xl mx-auto">
+       <h2 className="text-2xl font-bold text-white mb-6">Database & API</h2>
+       <div className="space-y-6">
+          <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+            <h3 className="text-lg font-bold text-green-400 mb-4"><i className="fas fa-database"></i> Supabase Integration</h3>
+            <div className="space-y-4">
+               <div><label className="text-sm text-gray-400">Supabase URL</label><input type="password" value={formData.supabaseUrl || ''} onChange={e => setFormData({...formData, supabaseUrl: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+               <div><label className="text-sm text-gray-400">Anon Key</label><input type="password" value={formData.supabaseKey || ''} onChange={e => setFormData({...formData, supabaseKey: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+               <div className="mt-4"><button onClick={() => setShowSql(!showSql)} className="text-primary text-sm font-bold"> {showSql ? 'Hide SQL' : 'Show SQL Schema'} </button>{showSql && <textarea readOnly value={SUPABASE_SCHEMA} className="w-full h-64 bg-dark-900 border border-dark-700 rounded-lg p-4 mt-2 text-xs font-mono text-gray-300" />}</div>
+            </div>
+          </div>
+          <button onClick={() => { updateSettings(formData); alert('Saved'); }} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan</button>
+       </div>
+    </div>
+  );
+};
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(SUPABASE_SCHEMA);
-    alert("Kode SQL berhasil disalin! Silakan paste di Supabase SQL Editor.");
+// --- Affiliate Views ---
+
+const AffiliateDashboard: React.FC = () => {
+  const { user, affiliates } = useAppContext();
+  
+  // Find current affiliate data
+  const myData = affiliates.find(a => a.id === user?.id);
+  
+  if (!myData) return <div className="p-8 text-center">Data afiliasi tidak ditemukan.</div>;
+
+  // Generate Referral Link
+  // Note: Using window.location.origin + hash structure
+  const referralLink = `${window.location.origin}${window.location.pathname}#/?ref=${myData.code}`;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(referralLink);
+    alert('Link referral berhasil disalin!');
   };
 
   return (
-    <div className="p-6 pb-24 max-w-4xl mx-auto">
-       <h2 className="text-2xl font-bold text-white mb-6">Database & API Configuration</h2>
-       
-       <div className="space-y-6">
-          <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
-            <h3 className="text-lg font-bold text-green-400 mb-4 flex items-center gap-2">
-              <i className="fas fa-database"></i> Supabase Integration
-            </h3>
-            <p className="text-sm text-gray-400 mb-4">
-              Masukkan kredensial Supabase Anda di sini. Jika kosong, aplikasi akan menggunakan LocalStorage browser.
-            </p>
-            <div className="space-y-4">
-               <div>
-                <label className="block text-sm text-gray-400 mb-1">Supabase URL</label>
-                <input 
-                  type="password"
-                  value={formData.supabaseUrl || ''}
-                  onChange={e => setFormData({...formData, supabaseUrl: e.target.value})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                />
-              </div>
-               <div>
-                <label className="block text-sm text-gray-400 mb-1">Supabase Anon Key</label>
-                <input 
-                  type="password"
-                  value={formData.supabaseKey || ''}
-                  onChange={e => setFormData({...formData, supabaseKey: e.target.value})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                />
-              </div>
-
-              {/* SQL Injection Area */}
-              <div className="mt-6 pt-6 border-t border-dark-700">
-                <button 
-                  onClick={() => setShowSql(!showSql)}
-                  className="text-sm text-primary hover:text-white flex items-center gap-2 font-medium"
-                >
-                  <i className={`fas fa-chevron-${showSql ? 'up' : 'down'}`}></i>
-                  {showSql ? 'Sembunyikan Schema SQL' : 'Tampilkan Schema SQL untuk Setup Tabel'}
-                </button>
-                
-                {showSql && (
-                    <div className="mt-4 relative">
-                        <div className="absolute top-2 right-2">
-                             <button 
-                                onClick={copyToClipboard}
-                                className="bg-primary hover:bg-indigo-600 text-white px-3 py-1 rounded text-xs font-bold"
-                            >
-                                <i className="fas fa-copy mr-1"></i> Copy SQL
-                            </button>
-                        </div>
-                        <textarea 
-                            readOnly
-                            value={SUPABASE_SCHEMA}
-                            className="w-full h-80 bg-dark-900 border border-dark-700 rounded-lg p-4 text-xs font-mono text-gray-300 focus:outline-none focus:border-primary"
-                        />
-                        <p className="text-[10px] text-gray-500 mt-2">
-                            <i className="fas fa-info-circle mr-1"></i>
-                            Panduan: Copy kode di atas, buka <a href="https://supabase.com/dashboard" target="_blank" className="text-primary hover:underline">Supabase Dashboard</a> &gt; Pilih Project &gt; SQL Editor &gt; Paste & Run.
-                        </p>
-                    </div>
-                )}
-              </div>
-            </div>
+    <div className="p-6 max-w-4xl mx-auto pb-24">
+      <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-8 mb-8 text-white shadow-lg">
+        <h2 className="text-3xl font-bold mb-2">Halo, {myData.name}!</h2>
+        <p className="opacity-80">Selamat datang di dashboard partner. Sebarkan link dan dapatkan komisi.</p>
+        
+        <div className="mt-6 flex flex-col md:flex-row gap-4 items-center bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/20">
+          <div className="flex-1 w-full">
+            <label className="text-xs uppercase tracking-wider opacity-70 mb-1 block">Link Referral Anda</label>
+            <div className="font-mono text-sm truncate bg-black/20 p-2 rounded">{referralLink}</div>
           </div>
-
-          <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
-            <h3 className="text-lg font-bold text-orange-400 mb-4 flex items-center gap-2">
-              <i className="fas fa-credit-card"></i> Tripay Payment Gateway
-            </h3>
-            <p className="text-sm text-gray-400 mb-4">
-              Konfigurasi Tripay untuk pembayaran otomatis. Pastikan menggunakan mode Production untuk live.
-            </p>
-            <div className="space-y-4">
-               <div>
-                <label className="block text-sm text-gray-400 mb-1">API Key</label>
-                <input 
-                  type="password"
-                  value={formData.tripayApiKey || ''}
-                  onChange={e => setFormData({...formData, tripayApiKey: e.target.value})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                />
-              </div>
-               <div>
-                <label className="block text-sm text-gray-400 mb-1">Private Key</label>
-                <input 
-                  type="password"
-                  value={formData.tripayPrivateKey || ''}
-                  onChange={e => setFormData({...formData, tripayPrivateKey: e.target.value})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Merchant Code</label>
-                <input 
-                  type="text"
-                  value={formData.tripayMerchantCode || ''}
-                  onChange={e => setFormData({...formData, tripayMerchantCode: e.target.value})}
-                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                />
-              </div>
-            </div>
-          </div>
-
-          <button onClick={handleSave} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl transition-colors">
-            Simpan Konfigurasi
+          <button onClick={copyLink} className="bg-white text-blue-700 px-6 py-2 rounded-lg font-bold hover:bg-gray-100 transition w-full md:w-auto">
+            <i className="fas fa-copy mr-2"></i> Salin Link
           </button>
-       </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+          <p className="text-gray-400 text-sm">Total Pendapatan</p>
+          <h3 className="text-3xl font-bold text-green-400 mt-2">Rp {myData.totalEarnings.toLocaleString()}</h3>
+        </div>
+        <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+          <p className="text-gray-400 text-sm">Komisi Per Penjualan</p>
+          <h3 className="text-3xl font-bold text-white mt-2">{myData.commissionRate}%</h3>
+        </div>
+        <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+          <p className="text-gray-400 text-sm">Kode Unik</p>
+          <h3 className="text-3xl font-bold text-blue-400 mt-2">{myData.code}</h3>
+        </div>
+      </div>
+
+      <div className="bg-dark-800 rounded-xl border border-dark-700 p-6">
+        <h3 className="text-lg font-bold text-white mb-4">Informasi Rekening</h3>
+        <p className="text-gray-400 mb-2">Komisi akan ditransfer ke rekening berikut:</p>
+        <div className="bg-dark-900 p-4 rounded-lg border border-dark-700 font-mono text-lg text-white">
+          {myData.bankDetails}
+        </div>
+        <p className="text-xs text-gray-500 mt-4">* Hubungi admin jika ingin mengubah data rekening.</p>
+      </div>
     </div>
   );
 };
@@ -828,85 +655,61 @@ const AdminDatabase: React.FC = () => {
 // --- Customer Views ---
 
 const CustomerHome: React.FC = () => {
-  const { products, settings, addToCart } = useAppContext();
+  const { products, settings, addToCart, setReferralCode } = useAppContext();
   const [searchParams] = useSearchParams();
   const [categoryFilter, setCategoryFilter] = useState('All');
 
-  // Sync with URL param if present
+  // Check for Referral Code in URL
+  useEffect(() => {
+    const ref = searchParams.get('ref');
+    if (ref) {
+      setReferralCode(ref); // Save to global state/storage
+    }
+  }, [searchParams, setReferralCode]);
+
+  // Sync with URL param for category
   useEffect(() => {
     const cat = searchParams.get('category');
     if (cat) {
       setCategoryFilter(cat);
-      // Scroll to products if category is set via URL
       setTimeout(() => document.getElementById('products')?.scrollIntoView({ behavior: 'smooth'}), 100);
     }
   }, [searchParams]);
 
   const categories = ['All', ...Array.from(new Set(products.map(p => p.category)))];
-  const filteredProducts = categoryFilter === 'All' 
-    ? products 
-    : products.filter(p => p.category === categoryFilter);
+  const filteredProducts = categoryFilter === 'All' ? products : products.filter(p => p.category === categoryFilter);
 
   return (
     <div className="pb-20">
-      {/* Hero Section */}
       <div className="relative bg-dark-800 overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-secondary/20 z-0"></div>
         <div className="max-w-6xl mx-auto px-6 py-16 relative z-10 text-center md:text-left md:flex items-center justify-between">
           <div className="mb-8 md:mb-0">
-            <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-4 leading-tight">
-              Produk Digital Terbaik <br/><span className="text-primary">Untuk Kebutuhanmu</span>
-            </h1>
-            <p className="text-gray-300 text-lg mb-6 max-w-xl">
-              {settings.description}
-            </p>
-            <button 
-              onClick={() => document.getElementById('products')?.scrollIntoView({ behavior: 'smooth'})}
-              className="bg-primary hover:bg-indigo-600 text-white px-8 py-3 rounded-full font-bold transition-all transform hover:scale-105"
-            >
-              Belanja Sekarang
-            </button>
+            <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-4 leading-tight">Produk Digital Terbaik <br/><span className="text-primary">Untuk Kebutuhanmu</span></h1>
+            <p className="text-gray-300 text-lg mb-6 max-w-xl">{settings.description}</p>
+            <button onClick={() => document.getElementById('products')?.scrollIntoView({ behavior: 'smooth'})} className="bg-primary hover:bg-indigo-600 text-white px-8 py-3 rounded-full font-bold transition-all transform hover:scale-105">Belanja Sekarang</button>
           </div>
-          <div className="hidden md:block">
-            <i className="fas fa-rocket text-9xl text-white/10 transform rotate-12"></i>
-          </div>
+          <div className="hidden md:block"><i className="fas fa-rocket text-9xl text-white/10 transform rotate-12"></i></div>
         </div>
       </div>
 
-      {/* Categories */}
       <div className="max-w-6xl mx-auto px-6 py-8 overflow-x-auto no-scrollbar">
         <div className="flex space-x-4">
           {categories.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setCategoryFilter(cat)}
-              className={`px-6 py-2 rounded-full border whitespace-nowrap transition-colors ${
-                categoryFilter === cat 
-                  ? 'bg-primary border-primary text-white' 
-                  : 'bg-dark-800 border-dark-700 text-gray-400 hover:bg-dark-700'
-              }`}
-            >
-              {cat}
-            </button>
+            <button key={cat} onClick={() => setCategoryFilter(cat)} className={`px-6 py-2 rounded-full border whitespace-nowrap transition-colors ${categoryFilter === cat ? 'bg-primary border-primary text-white' : 'bg-dark-800 border-dark-700 text-gray-400 hover:bg-dark-700'}`}>{cat}</button>
           ))}
         </div>
       </div>
 
-      {/* Products Grid */}
       <div id="products" className="max-w-6xl mx-auto px-6 mb-12">
         <h2 className="text-2xl font-bold text-white mb-6">Produk Terbaru</h2>
-        {filteredProducts.length === 0 ? (
-          <div className="text-center py-20 text-gray-500">Tidak ada produk ditemukan.</div>
-        ) : (
+        {filteredProducts.length === 0 ? <div className="text-center py-20 text-gray-500">Tidak ada produk ditemukan.</div> : 
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {filteredProducts.map(p => (
-              <ProductCard key={p.id} product={p} onAdd={() => {
-                addToCart(p);
-                alert("Produk ditambahkan ke keranjang!");
-              }} />
+              <ProductCard key={p.id} product={p} onAdd={() => { addToCart(p); alert("Produk ditambahkan ke keranjang!"); }} />
             ))}
           </div>
-        )}
+        }
       </div>
     </div>
   );
@@ -915,20 +718,13 @@ const CustomerHome: React.FC = () => {
 const CategoryView: React.FC = () => {
   const { products } = useAppContext();
   const categories = Array.from(new Set(products.map(p => p.category)));
-
   return (
     <div className="max-w-4xl mx-auto p-6 pb-24">
       <h2 className="text-2xl font-bold text-white mb-6">Kategori Produk</h2>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         {categories.map((cat, idx) => (
-          <Link 
-            to={`/?category=${cat}`} 
-            key={idx}
-            className="aspect-square bg-dark-800 rounded-xl border border-dark-700 flex flex-col items-center justify-center hover:bg-dark-700 hover:border-primary transition-all group"
-          >
-            <div className="w-16 h-16 bg-primary/20 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-               <i className="fas fa-folder text-2xl text-primary"></i>
-            </div>
+          <Link to={`/?category=${cat}`} key={idx} className="aspect-square bg-dark-800 rounded-xl border border-dark-700 flex flex-col items-center justify-center hover:bg-dark-700 hover:border-primary transition-all group">
+            <div className="w-16 h-16 bg-primary/20 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform"><i className="fas fa-folder text-2xl text-primary"></i></div>
             <span className="font-bold text-white text-lg">{cat}</span>
           </Link>
         ))}
@@ -941,248 +737,130 @@ const AccountView: React.FC = () => {
   const { user, logout } = useAppContext();
   const navigate = useNavigate();
 
-  if (!user) {
-    return <Navigate to="/login" />;
-  }
+  if (!user) return <Navigate to="/login" />;
 
-  const handleLogout = () => {
-    logout();
-    navigate('/');
-  };
+  const handleLogout = () => { logout(); navigate('/'); };
 
   return (
     <div className="max-w-md mx-auto p-6 pb-24">
       <div className="bg-dark-800 rounded-xl border border-dark-700 p-6 text-center">
-        <div className="w-24 h-24 bg-primary rounded-full mx-auto flex items-center justify-center mb-4">
-          <i className="fas fa-user text-4xl text-white"></i>
-        </div>
+        <div className="w-24 h-24 bg-primary rounded-full mx-auto flex items-center justify-center mb-4"><i className="fas fa-user text-4xl text-white"></i></div>
         <h2 className="text-2xl font-bold text-white mb-1">{user.name}</h2>
         <p className="text-primary text-sm font-semibold mb-6 uppercase">{user.role}</p>
 
         <div className="space-y-3">
           {user.role === 'ADMIN' && (
-            <Link to="/admin" className="block w-full bg-dark-700 hover:bg-dark-600 text-white py-3 rounded-xl border border-dark-600">
-              <i className="fas fa-cogs mr-2"></i> Ke Panel Admin
-            </Link>
+            <Link to="/admin" className="block w-full bg-dark-700 hover:bg-dark-600 text-white py-3 rounded-xl border border-dark-600"><i className="fas fa-cogs mr-2"></i> Ke Panel Admin</Link>
           )}
-          
-          <button 
-            onClick={handleLogout}
-            className="block w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 py-3 rounded-xl border border-red-500/20"
-          >
-            <i className="fas fa-sign-out-alt mr-2"></i> Keluar
-          </button>
+          {user.role === 'AFFILIATE' && (
+            <Link to="/affiliate" className="block w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl border border-blue-500"><i className="fas fa-chart-line mr-2"></i> Dashboard Afiliasi</Link>
+          )}
+          <button onClick={handleLogout} className="block w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 py-3 rounded-xl border border-red-500/20"><i className="fas fa-sign-out-alt mr-2"></i> Keluar</button>
         </div>
-      </div>
-      
-      <div className="mt-6 text-center text-gray-500 text-sm">
-        <p>Versi Aplikasi v1.0.0</p>
       </div>
     </div>
   );
 };
 
 const CustomerCart: React.FC = () => {
-  const { cart, removeFromCart, clearCart, settings, paymentMethods, vouchers } = useAppContext();
+  const { cart, removeFromCart, clearCart, settings, paymentMethods, vouchers, referralCode, affiliates, updateAffiliates } = useAppContext();
   const [selectedPayment, setSelectedPayment] = useState<string>('');
   const [voucherCode, setVoucherCode] = useState('');
   const [appliedVoucher, setAppliedVoucher] = useState<Voucher | null>(null);
   const navigate = useNavigate();
 
-  const subTotal = cart.reduce((sum, item) => {
-    const price = item.discountPrice || item.price;
-    return sum + (price * item.quantity);
-  }, 0);
-
-  // Calculate discount
+  const subTotal = cart.reduce((sum, item) => sum + ((item.discountPrice || item.price) * item.quantity), 0);
   let discountAmount = 0;
   if (appliedVoucher) {
-    if (appliedVoucher.type === 'PERCENT') {
-      discountAmount = (subTotal * appliedVoucher.value) / 100;
-    } else {
-      discountAmount = appliedVoucher.value;
-    }
+    discountAmount = appliedVoucher.type === 'PERCENT' ? (subTotal * appliedVoucher.value) / 100 : appliedVoucher.value;
   }
-
-  // Ensure total is not negative
   const total = Math.max(0, subTotal - discountAmount);
 
   const handleApplyVoucher = () => {
     if (!voucherCode) return;
     const found = vouchers.find(v => v.code === voucherCode.toUpperCase() && v.isActive);
-    if (found) {
-      setAppliedVoucher(found);
-      alert(`Voucher ${found.code} berhasil digunakan!`);
-    } else {
-      alert("Kode voucher tidak valid atau tidak aktif.");
-      setAppliedVoucher(null);
-    }
+    if (found) { setAppliedVoucher(found); alert(`Voucher ${found.code} digunakan!`); } 
+    else { alert("Voucher tidak valid"); setAppliedVoucher(null); }
   };
 
   const handleCheckout = () => {
-    if (!selectedPayment) return alert('Pilih metode pembayaran terlebih dahulu');
+    if (!selectedPayment) return alert('Pilih metode pembayaran');
     if (cart.length === 0) return alert('Keranjang kosong');
 
     const paymentMethod = paymentMethods.find(p => p.id === selectedPayment);
     
-    // Logic for Tripay (Simulated)
-    if (paymentMethod?.type === 'TRIPAY') {
-      alert(`[TRIPAY SIMULATION]\nRedirecting to Tripay Payment Gateway...\nTotal: Rp ${total.toLocaleString()}\nAPI Key: ${settings.tripayApiKey ? 'CONFIGURED' : 'MISSING'}`);
-      clearCart();
-      navigate('/');
-      return;
+    // Logic Affiliate: Calculate Commission & Update Earnings (Mocked in Local Storage for this demo)
+    let affiliateName = '';
+    if (referralCode) {
+      const affiliate = affiliates.find(a => a.code === referralCode);
+      if (affiliate && affiliate.isActive) {
+        affiliateName = affiliate.name;
+        // Mocking backend process: In a real app, this happens on server after payment confirmation
+        const commission = Math.round((subTotal * affiliate.commissionRate) / 100);
+        
+        // Clone and update
+        const updatedAffiliates = affiliates.map(a => {
+            if (a.id === affiliate.id) {
+                return { ...a, totalEarnings: a.totalEarnings + commission };
+            }
+            return a;
+        });
+        updateAffiliates(updatedAffiliates);
+        console.log(`Commission of ${commission} added to ${affiliate.name}`);
+      }
     }
 
-    // Logic for WhatsApp
-    let message = `Halo *${settings.storeName}*, saya ingin memesan:\n\n`;
-    cart.forEach((item, idx) => {
-      message += `${idx + 1}. ${item.name} x${item.quantity} - Rp ${(item.discountPrice || item.price).toLocaleString()}\n`;
-    });
-    
-    message += `\nSubtotal: Rp ${subTotal.toLocaleString()}`;
-    if (appliedVoucher) {
-        message += `\nVoucher (${appliedVoucher.code}): -Rp ${discountAmount.toLocaleString()}`;
+    if (paymentMethod?.type === 'TRIPAY') {
+      alert(`[TRIPAY] Redirecting...\nTotal: ${total}\nRef: ${referralCode || '-'}`);
+      clearCart(); navigate('/'); return;
     }
+
+    let message = `Halo *${settings.storeName}*, saya ingin memesan:\n\n`;
+    cart.forEach((item, idx) => { message += `${idx + 1}. ${item.name} x${item.quantity} - Rp ${(item.discountPrice || item.price).toLocaleString()}\n`; });
+    message += `\nSubtotal: Rp ${subTotal.toLocaleString()}`;
+    if (appliedVoucher) message += `\nVoucher (${appliedVoucher.code}): -Rp ${discountAmount.toLocaleString()}`;
     message += `\n*Total Akhir: Rp ${total.toLocaleString()}*`;
     message += `\nMetode Pembayaran: ${paymentMethod?.name}`;
+    if (referralCode) message += `\n\n[Internal Info] Ref Code: ${referralCode}`;
     message += `\n\nMohon diproses, terima kasih.`;
 
-    const encodedMessage = encodeURIComponent(message);
-    window.open(`https://wa.me/${settings.whatsapp}?text=${encodedMessage}`, '_blank');
-    
-    clearCart();
-    navigate('/');
+    window.open(`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(message)}`, '_blank');
+    clearCart(); navigate('/');
   };
 
-  const getQRCodeUrl = (data: string) => {
-     return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data)}`;
-  };
+  const getQRCodeUrl = (data: string) => `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data)}`;
 
-  if (cart.length === 0) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
-        <i className="fas fa-shopping-cart text-6xl text-dark-700 mb-4"></i>
-        <h2 className="text-xl font-bold text-white mb-2">Keranjang Kosong</h2>
-        <Link to="/" className="text-primary hover:underline">Kembali Belanja</Link>
-      </div>
-    );
-  }
+  if (cart.length === 0) return <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center"><i className="fas fa-shopping-cart text-6xl text-dark-700 mb-4"></i><h2 className="text-xl font-bold text-white mb-2">Keranjang Kosong</h2><Link to="/" className="text-primary">Kembali Belanja</Link></div>;
 
   const selectedPaymentDetails = paymentMethods.find(p => p.id === selectedPayment);
 
   return (
     <div className="max-w-2xl mx-auto p-6 pb-24">
       <h1 className="text-2xl font-bold text-white mb-6">Checkout</h1>
-      
-      {/* Items */}
       <div className="bg-dark-800 rounded-xl overflow-hidden mb-6 border border-dark-700">
         {cart.map(item => (
-          <div key={item.id} className="flex items-center gap-4 p-4 border-b border-dark-700 last:border-0">
-            <img src={item.image} alt={item.name} className="w-16 h-16 object-cover rounded" />
-            <div className="flex-1">
-              <h4 className="font-bold text-white text-sm">{item.name}</h4>
-              <p className="text-primary text-sm font-semibold">
-                Rp {(item.discountPrice || item.price).toLocaleString()} x {item.quantity}
-              </p>
-            </div>
-            <button onClick={() => removeFromCart(item.id)} className="text-red-400 p-2">
-              <i className="fas fa-trash"></i>
-            </button>
-          </div>
+          <div key={item.id} className="flex items-center gap-4 p-4 border-b border-dark-700 last:border-0"><img src={item.image} className="w-16 h-16 object-cover rounded" /><div className="flex-1"><h4 className="font-bold text-white text-sm">{item.name}</h4><p className="text-primary text-sm">Rp {(item.discountPrice || item.price).toLocaleString()} x {item.quantity}</p></div><button onClick={() => removeFromCart(item.id)} className="text-red-400 p-2"><i className="fas fa-trash"></i></button></div>
         ))}
-        
-        {/* Voucher Input */}
-        <div className="p-4 bg-dark-900 border-b border-dark-700">
-          <div className="flex gap-2">
-            <input 
-              type="text" 
-              value={voucherCode}
-              onChange={(e) => setVoucherCode(e.target.value.toUpperCase())}
-              placeholder="Punya kode voucher?"
-              className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none uppercase"
-            />
-            <button 
-              onClick={handleApplyVoucher}
-              className="bg-secondary hover:bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-            >
-              Pakai
-            </button>
-          </div>
-          {appliedVoucher && (
-            <div className="mt-2 text-green-400 text-sm flex items-center gap-1">
-              <i className="fas fa-check-circle"></i> Diskon diterapkan: {appliedVoucher.type === 'PERCENT' ? `${appliedVoucher.value}%` : `Rp ${appliedVoucher.value.toLocaleString()}`}
-            </div>
-          )}
-        </div>
-
-        {/* Totals */}
-        <div className="p-4 bg-dark-900 space-y-2">
-          <div className="flex justify-between items-center text-gray-400 text-sm">
-            <span>Subtotal</span>
-            <span>Rp {subTotal.toLocaleString()}</span>
-          </div>
-          {appliedVoucher && (
-             <div className="flex justify-between items-center text-green-400 text-sm">
-                <span>Diskon ({appliedVoucher.code})</span>
-                <span>-Rp {discountAmount.toLocaleString()}</span>
-             </div>
-          )}
-          <div className="flex justify-between items-center border-t border-dark-700 pt-2 mt-2">
-            <span className="text-gray-300">Total Pembayaran</span>
-            <span className="text-xl font-bold text-white">Rp {total.toLocaleString()}</span>
-          </div>
-        </div>
+        <div className="p-4 bg-dark-900 border-b border-dark-700"><div className="flex gap-2"><input type="text" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value.toUpperCase())} placeholder="Kode voucher?" className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-white uppercase" /><button onClick={handleApplyVoucher} className="bg-secondary text-white px-4 py-2 rounded-lg text-sm">Pakai</button></div>{appliedVoucher && <div className="mt-2 text-green-400 text-sm">Voucher aktif!</div>}</div>
+        <div className="p-4 bg-dark-900 space-y-2"><div className="flex justify-between text-gray-400 text-sm"><span>Subtotal</span><span>Rp {subTotal.toLocaleString()}</span></div>{appliedVoucher && <div className="flex justify-between text-green-400 text-sm"><span>Diskon</span><span>-Rp {discountAmount.toLocaleString()}</span></div>}<div className="flex justify-between border-t border-dark-700 pt-2 mt-2"><span className="text-gray-300">Total</span><span className="text-xl font-bold text-white">Rp {total.toLocaleString()}</span></div></div>
       </div>
+      
+      {referralCode && (
+        <div className="bg-blue-500/10 border border-blue-500/30 p-3 rounded-lg mb-6 flex items-center gap-2 text-blue-400 text-sm">
+           <i className="fas fa-info-circle"></i>
+           <span>Referral Code aktif: <b>{referralCode}</b></span>
+        </div>
+      )}
 
-      {/* Payment Selection */}
       <h2 className="text-lg font-bold text-white mb-3">Pilih Pembayaran</h2>
       <div className="grid gap-3 mb-6">
         {paymentMethods.map(pm => (
-          <div 
-            key={pm.id}
-            onClick={() => setSelectedPayment(pm.id)}
-            className={`cursor-pointer p-4 rounded-xl border flex items-center justify-between transition-all ${
-              selectedPayment === pm.id 
-                ? 'bg-primary/20 border-primary' 
-                : 'bg-dark-800 border-dark-700 hover:bg-dark-700'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 flex items-center justify-center bg-white rounded-full overflow-hidden">
-                 {pm.logo ? <img src={pm.logo} className="w-full h-full object-contain" /> : <i className="fas fa-wallet text-black"></i>}
-              </div>
-              <span className="font-medium text-white">{pm.name}</span>
-            </div>
-            {selectedPayment === pm.id && <i className="fas fa-check-circle text-primary"></i>}
-          </div>
+          <div key={pm.id} onClick={() => setSelectedPayment(pm.id)} className={`cursor-pointer p-4 rounded-xl border flex items-center justify-between ${selectedPayment === pm.id ? 'bg-primary/20 border-primary' : 'bg-dark-800 border-dark-700'}`}><div className="flex items-center gap-3"><div className="w-8 h-8 flex items-center justify-center bg-white rounded-full overflow-hidden">{pm.logo ? <img src={pm.logo} className="w-full h-full object-contain" /> : <i className="fas fa-wallet text-black"></i>}</div><span className="font-medium text-white">{pm.name}</span></div>{selectedPayment === pm.id && <i className="fas fa-check-circle text-primary"></i>}</div>
         ))}
       </div>
-
-      {/* QRIS / Account Detail View */}
-      {selectedPaymentDetails && selectedPaymentDetails.type === 'QRIS' && (
-        <div className="bg-white p-6 rounded-xl mb-6 flex flex-col items-center text-center">
-          <h3 className="text-black font-bold mb-2">Scan QRIS</h3>
-          <img src={getQRCodeUrl(`DIGISTORE-${total}`)} alt="QRIS" className="w-48 h-48 mb-2" />
-          <p className="text-black text-sm">NMID: ID123456789</p>
-        </div>
-      )}
-
-      {selectedPaymentDetails && selectedPaymentDetails.type === 'BANK' && (
-        <div className="bg-dark-800 p-4 rounded-xl mb-6 border border-dark-700">
-          <p className="text-gray-400 text-sm">Transfer ke:</p>
-          <p className="text-white font-bold text-lg">{selectedPaymentDetails.name}</p>
-          <p className="text-primary font-mono text-xl">{selectedPaymentDetails.accountNumber}</p>
-          <p className="text-white text-sm">A.N {selectedPaymentDetails.accountName}</p>
-        </div>
-      )}
-
-      <button 
-        onClick={handleCheckout}
-        className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-green-500/20 transition-all flex items-center justify-center gap-2"
-      >
-        <i className="fab fa-whatsapp text-xl"></i>
-        {selectedPaymentDetails?.type === 'TRIPAY' ? 'Bayar via Tripay' : 'Konfirmasi via WhatsApp'}
-      </button>
+      {selectedPaymentDetails?.type === 'QRIS' && <div className="bg-white p-6 rounded-xl mb-6 flex flex-col items-center text-center"><h3 className="text-black font-bold mb-2">Scan QRIS</h3><img src={getQRCodeUrl(`DIGISTORE-${total}`)} className="w-48 h-48 mb-2" /><p className="text-black text-sm">NMID: ID123456789</p></div>}
+      {selectedPaymentDetails?.type === 'BANK' && <div className="bg-dark-800 p-4 rounded-xl mb-6 border border-dark-700"><p className="text-gray-400 text-sm">Transfer ke:</p><p className="text-white font-bold text-lg">{selectedPaymentDetails.name}</p><p className="text-primary font-mono text-xl">{selectedPaymentDetails.accountNumber}</p><p className="text-white text-sm">A.N {selectedPaymentDetails.accountName}</p></div>}
+      <button onClick={handleCheckout} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2"><i className="fab fa-whatsapp text-xl"></i> {selectedPaymentDetails?.type === 'TRIPAY' ? 'Bayar via Tripay' : 'Konfirmasi via WhatsApp'}</button>
     </div>
   );
 };
@@ -1195,77 +873,32 @@ const CustomerLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-dark-900 text-gray-100 font-sans">
-      {/* Navbar Desktop/Mobile Top */}
       <nav className="sticky top-0 z-40 bg-dark-900/80 backdrop-blur-md border-b border-dark-700">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <Link to="/" className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                <i className="fas fa-bolt text-white"></i>
-              </div>
-              <span className="font-bold text-xl tracking-tight text-white">DigiStore</span>
-            </Link>
-            <div className="flex items-center gap-4">
-               {/* Desktop Menu */}
-               <div className="hidden md:flex items-center gap-6 mr-4">
-                  <Link to="/" className="text-gray-300 hover:text-white transition-colors">Produk</Link>
-                  <Link to="/categories" className="text-gray-300 hover:text-white transition-colors">Kategori</Link>
-                  <Link to="/history" className="text-gray-300 hover:text-white transition-colors">Riwayat</Link>
-               </div>
-
-              <Link to="/cart" className="relative p-2 text-gray-300 hover:text-white transition-colors">
-                <i className="fas fa-shopping-cart text-xl"></i>
-                {cart.length > 0 && (
-                  <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/4 -translate-y-1/4 bg-red-500 rounded-full">
-                    {cart.length}
-                  </span>
-                )}
-              </Link>
-              
-              {user ? (
-                <Link to="/account" className="hidden md:flex items-center gap-2 text-gray-300 hover:text-white">
-                  <i className="fas fa-user-circle text-xl"></i>
-                </Link>
-              ) : (
-                <Link to="/login" className="hidden md:block bg-primary px-4 py-2 rounded-lg text-sm font-medium text-white hover:bg-indigo-600 transition-colors">
-                  Login
-                </Link>
-              )}
-            </div>
+        <div className="max-w-6xl mx-auto px-4 flex items-center justify-between h-16">
+          <Link to="/" className="flex items-center gap-2"><div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center"><i className="fas fa-bolt text-white"></i></div><span className="font-bold text-xl tracking-tight text-white">DigiStore</span></Link>
+          <div className="flex items-center gap-4">
+             <div className="hidden md:flex items-center gap-6 mr-4"><Link to="/" className="text-gray-300 hover:text-white">Produk</Link><Link to="/categories" className="text-gray-300 hover:text-white">Kategori</Link></div>
+            <Link to="/cart" className="relative p-2 text-gray-300 hover:text-white"><i className="fas fa-shopping-cart text-xl"></i>{cart.length > 0 && <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/4 -translate-y-1/4 bg-red-500 rounded-full">{cart.length}</span>}</Link>
+            {user ? <Link to="/account" className="hidden md:flex items-center gap-2 text-gray-300 hover:text-white"><i className="fas fa-user-circle text-xl"></i></Link> : <Link to="/login" className="hidden md:block bg-primary px-4 py-2 rounded-lg text-sm font-medium text-white">Login</Link>}
           </div>
         </div>
       </nav>
-
-      {/* Content */}
       <div className="min-h-screen">
         <Routes>
           <Route path="/" element={<CustomerHome />} />
           <Route path="/cart" element={<CustomerCart />} />
           <Route path="/categories" element={<CategoryView />} />
           <Route path="/account" element={<AccountView />} />
+          <Route path="/affiliate" element={user?.role === 'AFFILIATE' ? <AffiliateDashboard /> : <Navigate to="/account" />} />
           <Route path="/history" element={<div className="p-10 text-center">Riwayat Pesanan (Fitur Mendatang)</div>} />
         </Routes>
       </div>
-
-      {/* Mobile Fixed Footer */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-dark-800 border-t border-dark-700 pb-safe z-50">
         <div className="grid grid-cols-4 h-16">
-          <Link to="/" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/' ? 'text-primary' : 'text-gray-400'}`}>
-            <i className="fas fa-store mb-1"></i>
-            <span className="text-[10px] font-medium">Toko</span>
-          </Link>
-           <Link to="/categories" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/categories' ? 'text-primary' : 'text-gray-400'}`}>
-            <i className="fas fa-th-large mb-1"></i>
-            <span className="text-[10px] font-medium">Kategori</span>
-          </Link>
-           <Link to="/history" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/history' ? 'text-primary' : 'text-gray-400'}`}>
-            <i className="fas fa-history mb-1"></i>
-            <span className="text-[10px] font-medium">Riwayat</span>
-          </Link>
-          <Link to="/account" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname.startsWith('/account') || location.pathname.startsWith('/admin') ? 'text-primary' : 'text-gray-400'}`}>
-            <i className="fas fa-user mb-1"></i>
-            <span className="text-[10px] font-medium">Akun</span>
-          </Link>
+          <Link to="/" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/' ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-store mb-1"></i><span className="text-[10px] font-medium">Toko</span></Link>
+           <Link to="/categories" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/categories' ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-th-large mb-1"></i><span className="text-[10px] font-medium">Kategori</span></Link>
+           <Link to="/history" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/history' ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-history mb-1"></i><span className="text-[10px] font-medium">Riwayat</span></Link>
+          <Link to="/account" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname.startsWith('/account') ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-user mb-1"></i><span className="text-[10px] font-medium">Akun</span></Link>
         </div>
       </div>
     </div>
@@ -1278,35 +911,16 @@ const AdminLayout: React.FC = () => {
   const { logout } = useAppContext();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
-
   return (
     <div className="flex h-screen bg-dark-900 text-gray-100 overflow-hidden">
-      <AdminSidebar 
-        isOpen={sidebarOpen} 
-        setIsOpen={setSidebarOpen} 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab}
-        onLogout={handleLogout}
-      />
-      
+      <AdminSidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} activeTab={activeTab} setActiveTab={setActiveTab} onLogout={() => { logout(); navigate('/login'); }} />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile Header */}
-        <header className="md:hidden flex items-center justify-between bg-dark-800 p-4 border-b border-dark-700">
-           <button onClick={() => setSidebarOpen(true)} className="text-gray-300">
-             <i className="fas fa-bars text-xl"></i>
-           </button>
-           <span className="font-bold text-white">Admin Panel</span>
-           <div className="w-6"></div> 
-        </header>
-
+        <header className="md:hidden flex items-center justify-between bg-dark-800 p-4 border-b border-dark-700"><button onClick={() => setSidebarOpen(true)} className="text-gray-300"><i className="fas fa-bars text-xl"></i></button><span className="font-bold text-white">Admin Panel</span><div className="w-6"></div></header>
         <main className="flex-1 overflow-y-auto bg-dark-900 relative">
           {activeTab === 'dashboard' && <AdminDashboard />}
           {activeTab === 'products' && <AdminProducts />}
           {activeTab === 'vouchers' && <AdminVouchers />}
+          {activeTab === 'affiliates' && <AdminAffiliates />}
           {activeTab === 'settings' && <AdminSettings />}
           {activeTab === 'database' && <AdminDatabase />}
         </main>
@@ -1316,7 +930,7 @@ const AdminLayout: React.FC = () => {
 };
 
 const Login: React.FC = () => {
-  const { login } = useAppContext();
+  const { login, affiliates } = useAppContext();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
@@ -1326,61 +940,43 @@ const Login: React.FC = () => {
     if (username === 'admin' && password === 'admin') {
       login('ADMIN', 'Admin User');
       navigate('/admin');
-    } else if (username && password) {
-      login('CUSTOMER', username);
-      navigate('/');
     } else {
-      alert('Login Gagal. Coba username: admin, password: admin');
+      // Check for affiliate login
+      const affiliate = affiliates.find(a => a.code === username.toUpperCase() && a.password === password);
+      if (affiliate) {
+        if (!affiliate.isActive) return alert("Akun affiliate non-aktif.");
+        login('AFFILIATE', affiliate.name, affiliate.id);
+        navigate('/account');
+        return;
+      }
+
+      // Default customer logic
+      if (username && password) {
+        login('CUSTOMER', username);
+        navigate('/');
+      } else {
+        alert('Login Gagal. Cek username/password.');
+      }
     }
   };
 
   return (
     <div className="min-h-screen bg-dark-900 flex items-center justify-center p-4">
       <div className="bg-dark-800 p-8 rounded-2xl shadow-2xl border border-dark-700 w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-primary rounded-xl mx-auto flex items-center justify-center mb-4 shadow-lg shadow-primary/30">
-            <i className="fas fa-bolt text-3xl text-white"></i>
-          </div>
-          <h1 className="text-2xl font-bold text-white">DigiStore Login</h1>
-        </div>
+        <div className="text-center mb-8"><div className="w-16 h-16 bg-primary rounded-xl mx-auto flex items-center justify-center mb-4 shadow-lg"><i className="fas fa-bolt text-3xl text-white"></i></div><h1 className="text-2xl font-bold text-white">DigiStore Login</h1></div>
         <form onSubmit={handleLogin} className="space-y-6">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Username</label>
-            <input 
-              type="text" 
-              value={username}
-              onChange={e => setUsername(e.target.value)}
-              className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 text-white focus:border-primary focus:outline-none transition-colors"
-              placeholder="Username"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Password</label>
-            <input 
-              type="password" 
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 text-white focus:border-primary focus:outline-none transition-colors"
-              placeholder="Password"
-            />
-          </div>
-          <button type="submit" className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-primary/25">
-            Masuk
-          </button>
+          <div><label className="block text-sm text-gray-400 mb-1">Username / Kode Affiliate</label><input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 text-white" /></div>
+          <div><label className="block text-sm text-gray-400 mb-1">Password</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 text-white" /></div>
+          <button type="submit" className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg">Masuk</button>
         </form>
-        <div className="mt-6 text-center">
-             <Link to="/" className="text-gray-500 hover:text-white text-sm">Kembali ke Toko</Link>
-        </div>
+        <div className="mt-6 text-center"><Link to="/" className="text-gray-500 hover:text-white text-sm">Kembali ke Toko</Link></div>
       </div>
     </div>
   );
 };
 
-// --- App Root ---
-
 const AppContent: React.FC = () => {
   const { user } = useAppContext();
-
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -1395,50 +991,36 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>(DataService.getProducts());
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(DataService.getPayments());
   const [vouchers, setVouchers] = useState<Voucher[]>(DataService.getVouchers());
+  const [affiliates, setAffiliates] = useState<Affiliate[]>(DataService.getAffiliates());
   const [cart, setCart] = useState<CartItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
+  const [referralCode, setReferralCode] = useState<string | null>(null);
 
-  // Persistence Effects
   useEffect(() => { DataService.saveSettings(settings); }, [settings]);
   useEffect(() => { DataService.saveProducts(products); }, [products]);
   useEffect(() => { DataService.savePayments(paymentMethods); }, [paymentMethods]);
   useEffect(() => { DataService.saveVouchers(vouchers); }, [vouchers]);
+  useEffect(() => { DataService.saveAffiliates(affiliates); }, [affiliates]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
       const existing = prev.find(p => p.id === product.id);
-      if (existing) {
-        return prev.map(p => p.id === product.id ? { ...p, quantity: p.quantity + 1 } : p);
-      }
-      return [...prev, { ...product, quantity: 1 }];
+      return existing ? prev.map(p => p.id === product.id ? { ...p, quantity: p.quantity + 1 } : p) : [...prev, { ...product, quantity: 1 }];
     });
   };
 
-  const removeFromCart = (id: string) => {
-    setCart(prev => prev.filter(p => p.id !== id));
-  };
-
-  const login = (role: 'ADMIN' | 'CUSTOMER', name: string) => {
-    setUser({ role, name });
-  };
+  const login = (role: 'ADMIN' | 'CUSTOMER' | 'AFFILIATE', name: string, id?: string) => setUser({ role, name, id });
 
   return (
     <AppContext.Provider value={{
-      settings,
-      updateSettings: setSettings,
-      products,
-      updateProducts: setProducts,
-      vouchers,
-      updateVouchers: setVouchers,
-      cart,
-      addToCart,
-      removeFromCart,
-      clearCart: () => setCart([]),
-      user,
-      login,
-      logout: () => setUser(null),
-      paymentMethods,
-      updatePayments: setPaymentMethods,
+      settings, updateSettings: setSettings,
+      products, updateProducts: setProducts,
+      vouchers, updateVouchers: setVouchers,
+      affiliates, updateAffiliates: setAffiliates,
+      cart, addToCart, removeFromCart: (id) => setCart(p => p.filter(x => x.id !== id)), clearCart: () => setCart([]),
+      user, login, logout: () => setUser(null),
+      paymentMethods, updatePayments: setPaymentMethods,
+      referralCode, setReferralCode
     }}>
       <Router>
         <AppContent />

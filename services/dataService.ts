@@ -1,4 +1,4 @@
-import { Product, StoreSettings, PaymentMethod, Order, Voucher } from '../types';
+import { Product, StoreSettings, PaymentMethod, Order, Voucher, Affiliate } from '../types';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'ds_products',
@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   PAYMENTS: 'ds_payments',
   ORDERS: 'ds_orders',
   VOUCHERS: 'ds_vouchers',
+  AFFILIATES: 'ds_affiliates',
 };
 
 // Initial Data
@@ -63,6 +64,19 @@ const initialVouchers: Voucher[] = [
   { id: '2', code: 'HEMAT20K', type: 'FIXED', value: 20000, isActive: true },
 ];
 
+const initialAffiliates: Affiliate[] = [
+  { 
+    id: '1', 
+    name: 'Partner Satu', 
+    code: 'PARTNER1', 
+    password: '123', 
+    commissionRate: 10, 
+    totalEarnings: 150000, 
+    bankDetails: 'BCA 123456', 
+    isActive: true 
+  }
+];
+
 // Helper to get from local storage or default
 const get = <T>(key: string, defaultVal: T): T => {
   const stored = localStorage.getItem(key);
@@ -96,4 +110,7 @@ export const DataService = {
     const orders = get<Order[]>(STORAGE_KEYS.ORDERS, []);
     set(STORAGE_KEYS.ORDERS, [order, ...orders]);
   },
+
+  getAffiliates: (): Affiliate[] => get(STORAGE_KEYS.AFFILIATES, initialAffiliates),
+  saveAffiliates: (affiliates: Affiliate[]) => set(STORAGE_KEYS.AFFILIATES, affiliates),
 };

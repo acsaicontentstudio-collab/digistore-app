@@ -14,6 +14,7 @@ const AdminSidebar: React.FC<Props> = ({ isOpen, setIsOpen, activeTab, setActive
     { id: 'dashboard', label: 'Dashboard', icon: 'fa-chart-pie' },
     { id: 'products', label: 'Produk', icon: 'fa-box-open' },
     { id: 'vouchers', label: 'Voucher', icon: 'fa-ticket-alt' },
+    { id: 'affiliates', label: 'Afiliasi', icon: 'fa-users' },
     { id: 'settings', label: 'Pengaturan Toko', icon: 'fa-cog' },
     { id: 'database', label: 'Database & API', icon: 'fa-database' },
   ];
