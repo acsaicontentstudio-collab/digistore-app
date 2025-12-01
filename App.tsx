@@ -193,6 +193,13 @@ const AdminProducts: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [currentProduct, setCurrentProduct] = useState<Partial<Product>>({});
 
+  // Generate dynamic category list from existing products + defaults
+  const availableCategories = useMemo(() => {
+    const defaults = ['Software', 'E-book', 'Course', 'Template'];
+    const fromProducts = products.map(p => p.category);
+    return Array.from(new Set([...defaults, ...fromProducts]));
+  }, [products]);
+
   const handleSave = () => {
     if (!currentProduct.name || !currentProduct.price) return alert("Nama dan Harga wajib diisi");
     
@@ -230,9 +237,9 @@ const AdminProducts: React.FC = () => {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'image' | 'fileUrl') => {
     const file = e.target.files?.[0];
     if (file) {
-      // Limit file size for localstorage demo purposes (limit 2MB)
-      if (file.size > 2 * 1024 * 1024) {
-        alert("File terlalu besar! Maksimal 2MB untuk demo ini.");
+      // Limit file size for localstorage demo purposes (limit 3MB)
+      if (file.size > 3 * 1024 * 1024) {
+        alert("File terlalu besar! Maksimal 3MB untuk demo ini.");
         return;
       }
 
@@ -242,6 +249,10 @@ const AdminProducts: React.FC = () => {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const isBase64 = (str: string) => {
+    return str?.startsWith('data:');
   };
 
   return (
@@ -305,30 +316,33 @@ const AdminProducts: React.FC = () => {
                     list="categories"
                     value={currentProduct.category || ''} 
                     onChange={e => setCurrentProduct({...currentProduct, category: e.target.value})}
+                    placeholder="Pilih atau ketik baru..."
                     className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
                   />
                   <datalist id="categories">
-                    <option value="Software" />
-                    <option value="E-book" />
-                    <option value="Course" />
-                    <option value="Template" />
+                    {availableCategories.map(cat => (
+                      <option key={cat} value={cat} />
+                    ))}
                   </datalist>
                 </div>
                  <div>
                   <label className="block text-sm text-gray-400 mb-1">Gambar Produk</label>
-                  <input 
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleFileUpload(e, 'image')}
-                    className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-indigo-600 mb-2"
-                  />
-                  <input 
-                    type="text" 
-                    value={currentProduct.image || ''} 
-                    onChange={e => setCurrentProduct({...currentProduct, image: e.target.value})}
-                    placeholder="atau paste URL gambar..."
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-xs"
-                  />
+                  <div className="flex flex-col gap-2">
+                    <input 
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleFileUpload(e, 'image')}
+                        className="block w-full text-xs text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white hover:file:bg-indigo-600"
+                    />
+                    <input 
+                        type="text" 
+                        value={isBase64(currentProduct.image || '') ? '(Gambar terupload)' : currentProduct.image || ''} 
+                        onChange={e => setCurrentProduct({...currentProduct, image: e.target.value})}
+                        placeholder="atau paste URL gambar..."
+                        disabled={isBase64(currentProduct.image || '')}
+                        className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -362,18 +376,21 @@ const AdminProducts: React.FC = () => {
               </div>
               <div>
                   <label className="block text-sm text-gray-400 mb-1">File Produk Digital</label>
-                  <input 
-                    type="file"
-                    onChange={(e) => handleFileUpload(e, 'fileUrl')}
-                    className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-secondary file:text-white hover:file:bg-purple-600 mb-2"
-                  />
-                  <input 
-                    type="text" 
-                    value={currentProduct.fileUrl || ''} 
-                    onChange={e => setCurrentProduct({...currentProduct, fileUrl: e.target.value})}
-                    placeholder="atau paste Link Google Drive / Dropbox..."
-                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
-                  />
+                   <div className="flex flex-col gap-2">
+                    <input 
+                        type="file"
+                        onChange={(e) => handleFileUpload(e, 'fileUrl')}
+                        className="block w-full text-xs text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-secondary file:text-white hover:file:bg-purple-600"
+                    />
+                    <input 
+                        type="text" 
+                        value={isBase64(currentProduct.fileUrl || '') ? '(File terupload)' : currentProduct.fileUrl || ''} 
+                        onChange={e => setCurrentProduct({...currentProduct, fileUrl: e.target.value})}
+                        placeholder="atau paste Link Google Drive / Dropbox..."
+                        disabled={isBase64(currentProduct.fileUrl || '')}
+                        className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
                   <p className="text-[10px] text-gray-500 mt-1">*Upload file akan dikonversi ke Base64 (untuk demo). Gunakan Link untuk file besar.</p>
               </div>
             </div>
@@ -1068,11 +1085,6 @@ const Login: React.FC = () => {
             <i className="fas fa-bolt text-3xl text-white"></i>
           </div>
           <h1 className="text-2xl font-bold text-white">DigiStore Login</h1>
-          <div className="mt-4 bg-primary/10 border border-primary/20 rounded-lg p-3 text-sm text-left">
-            <p className="text-primary font-bold mb-1">Demo Credentials:</p>
-            <p className="text-gray-300">User: <span className="font-mono text-white">admin</span></p>
-            <p className="text-gray-300">Pass: <span className="font-mono text-white">admin</span></p>
-          </div>
         </div>
         <form onSubmit={handleLogin} className="space-y-6">
           <div>
