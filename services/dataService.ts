@@ -1,10 +1,11 @@
-import { Product, StoreSettings, PaymentMethod, Order } from '../types';
+import { Product, StoreSettings, PaymentMethod, Order, Voucher } from '../types';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'ds_products',
   SETTINGS: 'ds_settings',
   PAYMENTS: 'ds_payments',
   ORDERS: 'ds_orders',
+  VOUCHERS: 'ds_vouchers',
 };
 
 // Initial Data
@@ -57,6 +58,11 @@ const initialProducts: Product[] = [
   }
 ];
 
+const initialVouchers: Voucher[] = [
+  { id: '1', code: 'DISKON10', type: 'PERCENT', value: 10, isActive: true },
+  { id: '2', code: 'HEMAT20K', type: 'FIXED', value: 20000, isActive: true },
+];
+
 // Helper to get from local storage or default
 const get = <T>(key: string, defaultVal: T): T => {
   const stored = localStorage.getItem(key);
@@ -81,6 +87,9 @@ export const DataService = {
 
   getPayments: (): PaymentMethod[] => get(STORAGE_KEYS.PAYMENTS, initialPayments),
   savePayments: (methods: PaymentMethod[]) => set(STORAGE_KEYS.PAYMENTS, methods),
+
+  getVouchers: (): Voucher[] => get(STORAGE_KEYS.VOUCHERS, initialVouchers),
+  saveVouchers: (vouchers: Voucher[]) => set(STORAGE_KEYS.VOUCHERS, vouchers),
 
   getOrders: (): Order[] => get(STORAGE_KEYS.ORDERS, []),
   saveOrder: (order: Order) => {

@@ -43,6 +43,14 @@ export interface User {
   name: string;
 }
 
+export interface Voucher {
+  id: string;
+  code: string;
+  type: 'FIXED' | 'PERCENT'; // Potongan Tetap (Rp) atau Persen (%)
+  value: number;
+  isActive: boolean;
+}
+
 export interface Order {
   id: string;
   items: CartItem[];
@@ -52,4 +60,6 @@ export interface Order {
   paymentMethod: string;
   status: 'PENDING' | 'PAID' | 'COMPLETED';
   date: string;
+  voucherCode?: string;
+  discountAmount?: number;
 }

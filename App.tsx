@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { Product, StoreSettings, CartItem, PaymentMethod, User } from './types';
+import { Product, StoreSettings, CartItem, PaymentMethod, User, Voucher } from './types';
 import { DataService } from './services/dataService';
 import AdminSidebar from './components/AdminSidebar';
 
@@ -51,6 +51,16 @@ create table if not exists payment_methods (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- Create Vouchers Table
+create table if not exists vouchers (
+  id uuid default uuid_generate_v4() primary key,
+  code text not null unique,
+  type text not null check (type in ('FIXED', 'PERCENT')),
+  value numeric not null,
+  is_active boolean default true,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- Create Orders Table
 create table if not exists orders (
   id uuid default uuid_generate_v4() primary key,
@@ -60,6 +70,8 @@ create table if not exists orders (
   payment_method text,
   status text default 'PENDING',
   items jsonb,
+  voucher_code text,
+  discount_amount numeric,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -67,12 +79,14 @@ create table if not exists orders (
 alter table products enable row level security;
 alter table store_settings enable row level security;
 alter table payment_methods enable row level security;
+alter table vouchers enable row level security;
 alter table orders enable row level security;
 
 -- Create Policies (Open access for simplicity in this demo, adjust for production)
 create policy "Public Access Products" on products for all using (true);
 create policy "Public Access Settings" on store_settings for all using (true);
 create policy "Public Access Payments" on payment_methods for all using (true);
+create policy "Public Access Vouchers" on vouchers for all using (true);
 create policy "Public Access Orders" on orders for all using (true);
 
 -- Initial Data
@@ -87,6 +101,8 @@ const AppContext = React.createContext<{
   updateSettings: (s: StoreSettings) => void;
   products: Product[];
   updateProducts: (p: Product[]) => void;
+  vouchers: Voucher[];
+  updateVouchers: (v: Voucher[]) => void;
   cart: CartItem[];
   addToCart: (p: Product) => void;
   removeFromCart: (id: string) => void;
@@ -148,7 +164,7 @@ const ProductCard: React.FC<{ product: Product, onAdd: () => void }> = ({ produc
 // --- Admin Views ---
 
 const AdminDashboard: React.FC = () => {
-  const { products, settings } = useAppContext();
+  const { products, vouchers } = useAppContext();
   return (
     <div className="p-6">
       <h2 className="text-2xl font-bold text-white mb-6">Dashboard</h2>
@@ -161,6 +177,17 @@ const AdminDashboard: React.FC = () => {
             </div>
             <div className="w-12 h-12 bg-primary/20 rounded-full flex items-center justify-center text-primary">
               <i className="fas fa-box text-xl"></i>
+            </div>
+          </div>
+        </div>
+         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-400 text-sm">Voucher Aktif</p>
+              <h3 className="text-3xl font-bold text-white mt-1">{vouchers.filter(v => v.isActive).length}</h3>
+            </div>
+            <div className="w-12 h-12 bg-secondary/20 rounded-full flex items-center justify-center text-secondary">
+              <i className="fas fa-ticket-alt text-xl"></i>
             </div>
           </div>
         </div>
@@ -180,7 +207,7 @@ const AdminDashboard: React.FC = () => {
       <div className="mt-8 bg-dark-800 rounded-xl border border-dark-700 p-6">
         <h3 className="text-xl font-bold text-white mb-4">Selamat Datang, Admin!</h3>
         <p className="text-gray-400">
-          Gunakan sidebar di sebelah kiri untuk mengelola produk, pengaturan toko, dan koneksi database.
+          Gunakan sidebar di sebelah kiri untuk mengelola produk, voucher, pengaturan toko, dan koneksi database.
           Aplikasi ini saat ini menggunakan LocalStorage untuk simulasi database. Untuk menggunakan Supabase, silakan konfigurasi di menu Database.
         </p>
       </div>
@@ -392,6 +419,165 @@ const AdminProducts: React.FC = () => {
                     />
                   </div>
                   <p className="text-[10px] text-gray-500 mt-1">*Upload file akan dikonversi ke Base64 (untuk demo). Gunakan Link untuk file besar.</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-4 mt-6">
+              <button 
+                onClick={() => setIsEditing(false)}
+                className="px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-dark-700"
+              >
+                Batal
+              </button>
+              <button 
+                onClick={handleSave}
+                className="px-6 py-2 rounded-lg bg-primary hover:bg-indigo-600 text-white font-medium"
+              >
+                Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AdminVouchers: React.FC = () => {
+  const { vouchers, updateVouchers } = useAppContext();
+  const [isEditing, setIsEditing] = useState(false);
+  const [currentVoucher, setCurrentVoucher] = useState<Partial<Voucher>>({});
+
+  const handleSave = () => {
+    if (!currentVoucher.code || !currentVoucher.value) return alert("Kode dan Nilai Diskon wajib diisi");
+    
+    let newVouchers = [...vouchers];
+    if (currentVoucher.id) {
+      newVouchers = newVouchers.map(v => v.id === currentVoucher.id ? { ...v, ...currentVoucher } as Voucher : v);
+    } else {
+      const newId = Date.now().toString();
+      const voucherToAdd: Voucher = {
+        id: newId,
+        code: currentVoucher.code.toUpperCase(),
+        type: currentVoucher.type || 'FIXED',
+        value: Number(currentVoucher.value),
+        isActive: currentVoucher.isActive !== undefined ? currentVoucher.isActive : true,
+      };
+      newVouchers.push(voucherToAdd);
+    }
+    updateVouchers(newVouchers);
+    setIsEditing(false);
+    setCurrentVoucher({});
+  };
+
+  const handleDelete = (id: string) => {
+    if (confirm('Yakin hapus voucher ini?')) {
+      updateVouchers(vouchers.filter(v => v.id !== id));
+    }
+  };
+
+  return (
+    <div className="p-6 pb-24">
+       <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Manajemen Voucher</h2>
+        <button 
+          onClick={() => { setCurrentVoucher({ type: 'FIXED', isActive: true }); setIsEditing(true); }}
+          className="bg-primary hover:bg-indigo-600 text-white px-4 py-2 rounded-lg"
+        >
+          <i className="fas fa-plus mr-2"></i> Buat Voucher
+        </button>
+      </div>
+
+      <div className="bg-dark-800 rounded-xl border border-dark-700 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm text-gray-400">
+            <thead className="bg-dark-900 text-gray-200 uppercase font-medium">
+              <tr>
+                <th className="px-6 py-4">Kode</th>
+                <th className="px-6 py-4">Tipe Diskon</th>
+                <th className="px-6 py-4">Nilai</th>
+                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4 text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-dark-700">
+              {vouchers.map(v => (
+                <tr key={v.id} className="hover:bg-dark-700/50">
+                  <td className="px-6 py-4 font-bold text-white">{v.code}</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded text-xs font-bold ${v.type === 'PERCENT' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>
+                      {v.type === 'PERCENT' ? 'Persentase (%)' : 'Potongan Tetap (Rp)'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 font-mono">
+                    {v.type === 'PERCENT' ? `${v.value}%` : `Rp ${v.value.toLocaleString()}`}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`w-2 h-2 rounded-full inline-block mr-2 ${v.isActive ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                    {v.isActive ? 'Aktif' : 'Non-Aktif'}
+                  </td>
+                  <td className="px-6 py-4 text-right space-x-3">
+                    <button onClick={() => { setCurrentVoucher(v); setIsEditing(true); }} className="text-blue-400 hover:text-white"><i className="fas fa-edit"></i></button>
+                    <button onClick={() => handleDelete(v.id)} className="text-red-400 hover:text-white"><i className="fas fa-trash"></i></button>
+                  </td>
+                </tr>
+              ))}
+              {vouchers.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-gray-500">Belum ada voucher dibuat.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {isEditing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="bg-dark-800 rounded-xl p-6 w-full max-w-md border border-dark-700 shadow-2xl">
+            <h3 className="text-xl font-bold text-white mb-4">{currentVoucher.id ? 'Edit Voucher' : 'Buat Voucher Baru'}</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Kode Voucher (Unik)</label>
+                <input 
+                  type="text" 
+                  value={currentVoucher.code || ''} 
+                  onChange={e => setCurrentVoucher({...currentVoucher, code: e.target.value.toUpperCase()})}
+                  className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none uppercase"
+                  placeholder="CONTOH: HEMAT10"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                  <label className="block text-sm text-gray-400 mb-1">Tipe Diskon</label>
+                  <select 
+                    value={currentVoucher.type || 'FIXED'} 
+                    onChange={e => setCurrentVoucher({...currentVoucher, type: e.target.value as 'FIXED' | 'PERCENT'})}
+                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
+                  >
+                    <option value="FIXED">Potongan Harga (Rp)</option>
+                    <option value="PERCENT">Persentase (%)</option>
+                  </select>
+                </div>
+                 <div>
+                  <label className="block text-sm text-gray-400 mb-1">Nilai</label>
+                  <input 
+                    type="number" 
+                    value={currentVoucher.value || ''} 
+                    onChange={e => setCurrentVoucher({...currentVoucher, value: Number(e.target.value)})}
+                    className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
+                    placeholder={currentVoucher.type === 'PERCENT' ? 'Contoh: 10' : 'Contoh: 10000'}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input 
+                  type="checkbox" 
+                  id="isActive"
+                  checked={currentVoucher.isActive}
+                  onChange={e => setCurrentVoucher({...currentVoucher, isActive: e.target.checked})}
+                  className="w-4 h-4 rounded bg-dark-900 border-dark-700 text-primary focus:ring-primary"
+                />
+                <label htmlFor="isActive" className="text-sm text-white select-none">Status Aktif</label>
               </div>
             </div>
             <div className="flex justify-end gap-4 mt-6">
@@ -797,14 +983,41 @@ const AccountView: React.FC = () => {
 };
 
 const CustomerCart: React.FC = () => {
-  const { cart, removeFromCart, clearCart, settings, paymentMethods } = useAppContext();
+  const { cart, removeFromCart, clearCart, settings, paymentMethods, vouchers } = useAppContext();
   const [selectedPayment, setSelectedPayment] = useState<string>('');
+  const [voucherCode, setVoucherCode] = useState('');
+  const [appliedVoucher, setAppliedVoucher] = useState<Voucher | null>(null);
   const navigate = useNavigate();
 
-  const total = cart.reduce((sum, item) => {
+  const subTotal = cart.reduce((sum, item) => {
     const price = item.discountPrice || item.price;
     return sum + (price * item.quantity);
   }, 0);
+
+  // Calculate discount
+  let discountAmount = 0;
+  if (appliedVoucher) {
+    if (appliedVoucher.type === 'PERCENT') {
+      discountAmount = (subTotal * appliedVoucher.value) / 100;
+    } else {
+      discountAmount = appliedVoucher.value;
+    }
+  }
+
+  // Ensure total is not negative
+  const total = Math.max(0, subTotal - discountAmount);
+
+  const handleApplyVoucher = () => {
+    if (!voucherCode) return;
+    const found = vouchers.find(v => v.code === voucherCode.toUpperCase() && v.isActive);
+    if (found) {
+      setAppliedVoucher(found);
+      alert(`Voucher ${found.code} berhasil digunakan!`);
+    } else {
+      alert("Kode voucher tidak valid atau tidak aktif.");
+      setAppliedVoucher(null);
+    }
+  };
 
   const handleCheckout = () => {
     if (!selectedPayment) return alert('Pilih metode pembayaran terlebih dahulu');
@@ -814,7 +1027,7 @@ const CustomerCart: React.FC = () => {
     
     // Logic for Tripay (Simulated)
     if (paymentMethod?.type === 'TRIPAY') {
-      alert(`[TRIPAY SIMULATION]\nRedirecting to Tripay Payment Gateway...\nAPI Key: ${settings.tripayApiKey ? 'CONFIGURED' : 'MISSING'}`);
+      alert(`[TRIPAY SIMULATION]\nRedirecting to Tripay Payment Gateway...\nTotal: Rp ${total.toLocaleString()}\nAPI Key: ${settings.tripayApiKey ? 'CONFIGURED' : 'MISSING'}`);
       clearCart();
       navigate('/');
       return;
@@ -825,7 +1038,12 @@ const CustomerCart: React.FC = () => {
     cart.forEach((item, idx) => {
       message += `${idx + 1}. ${item.name} x${item.quantity} - Rp ${(item.discountPrice || item.price).toLocaleString()}\n`;
     });
-    message += `\n*Total: Rp ${total.toLocaleString()}*`;
+    
+    message += `\nSubtotal: Rp ${subTotal.toLocaleString()}`;
+    if (appliedVoucher) {
+        message += `\nVoucher (${appliedVoucher.code}): -Rp ${discountAmount.toLocaleString()}`;
+    }
+    message += `\n*Total Akhir: Rp ${total.toLocaleString()}*`;
     message += `\nMetode Pembayaran: ${paymentMethod?.name}`;
     message += `\n\nMohon diproses, terima kasih.`;
 
@@ -872,9 +1090,47 @@ const CustomerCart: React.FC = () => {
             </button>
           </div>
         ))}
-        <div className="p-4 bg-dark-900 flex justify-between items-center">
-          <span className="text-gray-400">Total Pembayaran</span>
-          <span className="text-xl font-bold text-white">Rp {total.toLocaleString()}</span>
+        
+        {/* Voucher Input */}
+        <div className="p-4 bg-dark-900 border-b border-dark-700">
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              value={voucherCode}
+              onChange={(e) => setVoucherCode(e.target.value.toUpperCase())}
+              placeholder="Punya kode voucher?"
+              className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none uppercase"
+            />
+            <button 
+              onClick={handleApplyVoucher}
+              className="bg-secondary hover:bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+            >
+              Pakai
+            </button>
+          </div>
+          {appliedVoucher && (
+            <div className="mt-2 text-green-400 text-sm flex items-center gap-1">
+              <i className="fas fa-check-circle"></i> Diskon diterapkan: {appliedVoucher.type === 'PERCENT' ? `${appliedVoucher.value}%` : `Rp ${appliedVoucher.value.toLocaleString()}`}
+            </div>
+          )}
+        </div>
+
+        {/* Totals */}
+        <div className="p-4 bg-dark-900 space-y-2">
+          <div className="flex justify-between items-center text-gray-400 text-sm">
+            <span>Subtotal</span>
+            <span>Rp {subTotal.toLocaleString()}</span>
+          </div>
+          {appliedVoucher && (
+             <div className="flex justify-between items-center text-green-400 text-sm">
+                <span>Diskon ({appliedVoucher.code})</span>
+                <span>-Rp {discountAmount.toLocaleString()}</span>
+             </div>
+          )}
+          <div className="flex justify-between items-center border-t border-dark-700 pt-2 mt-2">
+            <span className="text-gray-300">Total Pembayaran</span>
+            <span className="text-xl font-bold text-white">Rp {total.toLocaleString()}</span>
+          </div>
         </div>
       </div>
 
@@ -1050,6 +1306,7 @@ const AdminLayout: React.FC = () => {
         <main className="flex-1 overflow-y-auto bg-dark-900 relative">
           {activeTab === 'dashboard' && <AdminDashboard />}
           {activeTab === 'products' && <AdminProducts />}
+          {activeTab === 'vouchers' && <AdminVouchers />}
           {activeTab === 'settings' && <AdminSettings />}
           {activeTab === 'database' && <AdminDatabase />}
         </main>
@@ -1137,6 +1394,7 @@ export default function App() {
   const [settings, setSettings] = useState<StoreSettings>(DataService.getSettings());
   const [products, setProducts] = useState<Product[]>(DataService.getProducts());
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(DataService.getPayments());
+  const [vouchers, setVouchers] = useState<Voucher[]>(DataService.getVouchers());
   const [cart, setCart] = useState<CartItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
 
@@ -1144,6 +1402,7 @@ export default function App() {
   useEffect(() => { DataService.saveSettings(settings); }, [settings]);
   useEffect(() => { DataService.saveProducts(products); }, [products]);
   useEffect(() => { DataService.savePayments(paymentMethods); }, [paymentMethods]);
+  useEffect(() => { DataService.saveVouchers(vouchers); }, [vouchers]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -1169,6 +1428,8 @@ export default function App() {
       updateSettings: setSettings,
       products,
       updateProducts: setProducts,
+      vouchers,
+      updateVouchers: setVouchers,
       cart,
       addToCart,
       removeFromCart,
