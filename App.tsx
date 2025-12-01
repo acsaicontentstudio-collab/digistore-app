@@ -11,8 +11,17 @@ import AdminSidebar from './components/AdminSidebar';
 const SUPABASE_SCHEMA = `-- Enable UUID extension
 create extension if not exists "uuid-ossp";
 
+-- !!! RESET TABLES !!! 
+-- (Menghapus tabel lama agar struktur baru bisa dibuat dengan benar. Data lama di cloud akan hilang)
+drop table if exists products cascade;
+drop table if exists store_settings cascade;
+drop table if exists payment_methods cascade;
+drop table if exists vouchers cascade;
+drop table if exists affiliates cascade;
+drop table if exists orders cascade;
+
 -- Create Products Table
-create table if not exists products (
+create table products (
   id text primary key,
   name text not null,
   category text,
@@ -26,7 +35,7 @@ create table if not exists products (
 );
 
 -- Create Store Settings Table
-create table if not exists store_settings (
+create table store_settings (
   id text primary key,
   store_name text,
   address text,
@@ -41,7 +50,7 @@ create table if not exists store_settings (
 );
 
 -- Create Payment Methods Table
-create table if not exists payment_methods (
+create table payment_methods (
   id text primary key,
   type text not null,
   name text not null,
@@ -54,7 +63,7 @@ create table if not exists payment_methods (
 );
 
 -- Create Vouchers Table
-create table if not exists vouchers (
+create table vouchers (
   id text primary key,
   code text not null unique,
   type text not null check (type in ('FIXED', 'PERCENT')),
@@ -64,7 +73,7 @@ create table if not exists vouchers (
 );
 
 -- Create Affiliates Table
-create table if not exists affiliates (
+create table affiliates (
   id text primary key,
   name text not null,
   code text not null unique,
@@ -77,7 +86,7 @@ create table if not exists affiliates (
 );
 
 -- Create Orders Table
-create table if not exists orders (
+create table orders (
   id text primary key,
   customer_name text,
   customer_whatsapp text,
@@ -98,15 +107,7 @@ alter table vouchers enable row level security;
 alter table affiliates enable row level security;
 alter table orders enable row level security;
 
--- DROP POLICIES IF EXIST (Fix for Re-running script)
-drop policy if exists "Public Access Products" on products;
-drop policy if exists "Public Access Settings" on store_settings;
-drop policy if exists "Public Access Payments" on payment_methods;
-drop policy if exists "Public Access Vouchers" on vouchers;
-drop policy if exists "Public Access Affiliates" on affiliates;
-drop policy if exists "Public Access Orders" on orders;
-
--- Create Policies (Open access for simplicity in this demo, adjust for production)
+-- Create Policies (Open access for simplicity in this demo)
 create policy "Public Access Products" on products for all using (true) with check (true);
 create policy "Public Access Settings" on store_settings for all using (true) with check (true);
 create policy "Public Access Payments" on payment_methods for all using (true) with check (true);
@@ -1283,7 +1284,7 @@ export default function App() {
           if (payData && payData.length > 0) {
               const mappedPayments: PaymentMethod[] = payData.map((p: any) => ({
                   id: p.id, type: p.type, name: p.name, accountNumber: p.account_number,
-                  accountName: p.account_name, description: p.description, logo: p.logo, isActive: p.is_active
+                  accountName: p.account_name, description: p.description, logo: p.logo, is_active: p.is_active
               }));
               setPaymentMethods(mappedPayments);
               DataService.savePayments(mappedPayments);
