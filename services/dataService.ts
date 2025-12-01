@@ -1,4 +1,5 @@
-import { Product, StoreSettings, PaymentMethod, Order, Voucher, Affiliate } from '../types';
+
+import { Product, StoreSettings, PaymentMethod, Order, Voucher, Affiliate, Customer } from '../types';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'ds_products',
@@ -7,6 +8,7 @@ const STORAGE_KEYS = {
   ORDERS: 'ds_orders',
   VOUCHERS: 'ds_vouchers',
   AFFILIATES: 'ds_affiliates',
+  CUSTOMERS: 'ds_customers',
 };
 
 // Initial Data
@@ -17,6 +19,9 @@ const initialSettings: StoreSettings = {
   email: 'admin@digistore.com',
   description: 'Toko produk digital terpercaya dan terlengkap.',
   logoUrl: 'https://picsum.photos/id/42/200/200',
+  // Admin Credentials Default
+  adminUsername: 'admin',
+  adminPassword: 'admin',
   // Inject Environment Variables automatically
   supabaseUrl: (import.meta as any).env?.VITE_SUPABASE_URL || '',
   supabaseKey: (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '',
@@ -120,7 +125,12 @@ export const DataService = {
     const orders = get<Order[]>(STORAGE_KEYS.ORDERS, []);
     set(STORAGE_KEYS.ORDERS, [order, ...orders]);
   },
+  // Overwrite all orders (for sync)
+  saveOrders: (orders: Order[]) => set(STORAGE_KEYS.ORDERS, orders),
 
   getAffiliates: (): Affiliate[] => get(STORAGE_KEYS.AFFILIATES, initialAffiliates),
   saveAffiliates: (affiliates: Affiliate[]) => set(STORAGE_KEYS.AFFILIATES, affiliates),
+
+  getCustomers: (): Customer[] => get(STORAGE_KEYS.CUSTOMERS, []),
+  saveCustomers: (customers: Customer[]) => set(STORAGE_KEYS.CUSTOMERS, customers),
 };

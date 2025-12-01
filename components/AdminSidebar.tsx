@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -13,9 +14,10 @@ const AdminSidebar: React.FC<Props> = ({ isOpen, setIsOpen, activeTab, setActive
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'fa-chart-pie' },
     { id: 'products', label: 'Produk', icon: 'fa-box-open' },
+    { id: 'customers', label: 'Pelanggan', icon: 'fa-users-cog' },
     { id: 'vouchers', label: 'Voucher', icon: 'fa-ticket-alt' },
-    { id: 'affiliates', label: 'Afiliasi', icon: 'fa-users' },
-    { id: 'settings', label: 'Pengaturan Toko', icon: 'fa-cog' },
+    { id: 'affiliates', label: 'Afiliasi', icon: 'fa-handshake' },
+    { id: 'settings', label: 'Pengaturan', icon: 'fa-cog' },
     { id: 'database', label: 'Database & API', icon: 'fa-database' },
   ];
 

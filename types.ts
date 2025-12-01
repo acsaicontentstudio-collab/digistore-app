@@ -1,3 +1,4 @@
+
 export interface Product {
   id: string;
   name: string;
@@ -33,6 +34,9 @@ export interface StoreSettings {
   tripayApiKey?: string;
   tripayPrivateKey?: string;
   tripayMerchantCode?: string;
+  // Admin Auth
+  adminUsername?: string;
+  adminPassword?: string;
 }
 
 export interface CartItem extends Product {
@@ -42,7 +46,16 @@ export interface CartItem extends Product {
 export interface User {
   role: 'ADMIN' | 'CUSTOMER' | 'AFFILIATE';
   name: string;
-  id?: string; // Used for affiliate linking
+  id?: string; // Used for affiliate linking or customer ID
+  phone?: string; // WhatsApp number for customers
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  whatsapp: string; // Unique ID used for login
+  password: string;
+  createdAt: string;
 }
 
 export interface Voucher {
