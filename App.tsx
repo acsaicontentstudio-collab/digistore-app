@@ -4,6 +4,82 @@ import { Product, StoreSettings, CartItem, PaymentMethod, User } from './types';
 import { DataService } from './services/dataService';
 import AdminSidebar from './components/AdminSidebar';
 
+// --- Constants ---
+
+const SUPABASE_SCHEMA = `-- Enable UUID extension
+create extension if not exists "uuid-ossp";
+
+-- Create Products Table
+create table if not exists products (
+  id uuid default uuid_generate_v4() primary key,
+  name text not null,
+  category text,
+  description text,
+  price numeric not null,
+  discount_price numeric,
+  image text,
+  file_url text,
+  is_popular boolean default false,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Create Store Settings Table
+create table if not exists store_settings (
+  id uuid default uuid_generate_v4() primary key,
+  store_name text,
+  address text,
+  whatsapp text,
+  email text,
+  description text,
+  logo_url text,
+  tripay_api_key text,
+  tripay_private_key text,
+  tripay_merchant_code text,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Create Payment Methods Table
+create table if not exists payment_methods (
+  id uuid default uuid_generate_v4() primary key,
+  type text not null,
+  name text not null,
+  account_number text,
+  account_name text,
+  description text,
+  logo text,
+  is_active boolean default true,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Create Orders Table
+create table if not exists orders (
+  id uuid default uuid_generate_v4() primary key,
+  customer_name text,
+  customer_whatsapp text,
+  total numeric not null,
+  payment_method text,
+  status text default 'PENDING',
+  items jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Enable RLS
+alter table products enable row level security;
+alter table store_settings enable row level security;
+alter table payment_methods enable row level security;
+alter table orders enable row level security;
+
+-- Create Policies (Open access for simplicity in this demo, adjust for production)
+create policy "Public Access Products" on products for all using (true);
+create policy "Public Access Settings" on store_settings for all using (true);
+create policy "Public Access Payments" on payment_methods for all using (true);
+create policy "Public Access Orders" on orders for all using (true);
+
+-- Initial Data
+insert into store_settings (store_name, address, whatsapp, email, description)
+values ('DigiStore Pro', 'Jl. Digital No. 1', '6281234567890', 'admin@digistore.com', 'Toko produk digital terpercaya.');
+`;
+
 // --- Context & State ---
 
 const AppContext = React.createContext<{
@@ -421,10 +497,16 @@ const AdminSettings: React.FC = () => {
 const AdminDatabase: React.FC = () => {
   const { settings, updateSettings } = useAppContext();
   const [formData, setFormData] = useState(settings);
+  const [showSql, setShowSql] = useState(false);
 
   const handleSave = () => {
     updateSettings(formData);
     alert('Konfigurasi API disimpan.');
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(SUPABASE_SCHEMA);
+    alert("Kode SQL berhasil disalin! Silakan paste di Supabase SQL Editor.");
   };
 
   return (
@@ -457,6 +539,39 @@ const AdminDatabase: React.FC = () => {
                   onChange={e => setFormData({...formData, supabaseKey: e.target.value})}
                   className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white focus:border-primary focus:outline-none"
                 />
+              </div>
+
+              {/* SQL Injection Area */}
+              <div className="mt-6 pt-6 border-t border-dark-700">
+                <button 
+                  onClick={() => setShowSql(!showSql)}
+                  className="text-sm text-primary hover:text-white flex items-center gap-2 font-medium"
+                >
+                  <i className={`fas fa-chevron-${showSql ? 'up' : 'down'}`}></i>
+                  {showSql ? 'Sembunyikan Schema SQL' : 'Tampilkan Schema SQL untuk Setup Tabel'}
+                </button>
+                
+                {showSql && (
+                    <div className="mt-4 relative">
+                        <div className="absolute top-2 right-2">
+                             <button 
+                                onClick={copyToClipboard}
+                                className="bg-primary hover:bg-indigo-600 text-white px-3 py-1 rounded text-xs font-bold"
+                            >
+                                <i className="fas fa-copy mr-1"></i> Copy SQL
+                            </button>
+                        </div>
+                        <textarea 
+                            readOnly
+                            value={SUPABASE_SCHEMA}
+                            className="w-full h-80 bg-dark-900 border border-dark-700 rounded-lg p-4 text-xs font-mono text-gray-300 focus:outline-none focus:border-primary"
+                        />
+                        <p className="text-[10px] text-gray-500 mt-2">
+                            <i className="fas fa-info-circle mr-1"></i>
+                            Panduan: Copy kode di atas, buka <a href="https://supabase.com/dashboard" target="_blank" className="text-primary hover:underline">Supabase Dashboard</a> &gt; Pilih Project &gt; SQL Editor &gt; Paste & Run.
+                        </p>
+                    </div>
+                )}
               </div>
             </div>
           </div>

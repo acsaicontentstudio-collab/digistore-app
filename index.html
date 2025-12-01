@@ -4,8 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DigiStore Pro</title>
-    <!-- Tailwind via CDN is kept for simplicity to avoid PostCSS setup, 
-         but allows Vite to bundle JS logic correctly -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -18,12 +16,12 @@
               sans: ['Inter', 'sans-serif'],
             },
             colors: {
-              primary: '#6366f1', // Indigo 500
-              secondary: '#a855f7', // Purple 500
+              primary: '#6366f1', 
+              secondary: '#a855f7',
               dark: {
-                900: '#0f172a', // Slate 900
-                800: '#1e293b', // Slate 800
-                700: '#334155', // Slate 700
+                900: '#0f172a',
+                800: '#1e293b',
+                700: '#334155',
               }
             }
           }
@@ -35,17 +33,10 @@
         background-color: #0f172a;
         color: #f8fafc;
       }
-      /* Hide scrollbar for Chrome, Safari and Opera */
-      .no-scrollbar::-webkit-scrollbar {
-          display: none;
-      }
-      /* Hide scrollbar for IE, Edge and Firefox */
-      .no-scrollbar {
-          -ms-overflow-style: none;  /* IE and Edge */
-          scrollbar-width: none;  /* Firefox */
-      }
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
-  <script type="importmap">
+<script type="importmap">
 {
   "imports": {
     "react": "https://aistudiocdn.com/react@^19.2.0",
@@ -57,7 +48,6 @@
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
 </head>
   <body>
     <div id="root"></div>
