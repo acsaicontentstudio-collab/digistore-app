@@ -17,6 +17,9 @@ const initialSettings: StoreSettings = {
   email: 'admin@digistore.com',
   description: 'Toko produk digital terpercaya dan terlengkap.',
   logoUrl: 'https://picsum.photos/id/42/200/200',
+  // Inject Environment Variables automatically
+  supabaseUrl: (import.meta as any).env?.VITE_SUPABASE_URL || '',
+  supabaseKey: (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '',
 };
 
 const initialPayments: PaymentMethod[] = [
@@ -29,7 +32,7 @@ const initialPayments: PaymentMethod[] = [
 
 const initialProducts: Product[] = [
   {
-    id: '1',
+    id: '550e8400-e29b-41d4-a716-446655440001',
     name: 'Premium UI Kit',
     category: 'Design',
     price: 150000,
@@ -39,7 +42,7 @@ const initialProducts: Product[] = [
     isPopular: true,
   },
   {
-    id: '2',
+    id: '550e8400-e29b-41d4-a716-446655440002',
     name: 'React Dashboard Template',
     category: 'Code',
     price: 350000,
@@ -49,7 +52,7 @@ const initialProducts: Product[] = [
     isPopular: false,
   },
   {
-    id: '3',
+    id: '550e8400-e29b-41d4-a716-446655440003',
     name: 'E-book: Mastering React',
     category: 'Education',
     price: 75000,
@@ -60,13 +63,13 @@ const initialProducts: Product[] = [
 ];
 
 const initialVouchers: Voucher[] = [
-  { id: '1', code: 'DISKON10', type: 'PERCENT', value: 10, isActive: true },
-  { id: '2', code: 'HEMAT20K', type: 'FIXED', value: 20000, isActive: true },
+  { id: '550e8400-e29b-41d4-a716-446655440004', code: 'DISKON10', type: 'PERCENT', value: 10, isActive: true },
+  { id: '550e8400-e29b-41d4-a716-446655440005', code: 'HEMAT20K', type: 'FIXED', value: 20000, isActive: true },
 ];
 
 const initialAffiliates: Affiliate[] = [
   { 
-    id: '1', 
+    id: '550e8400-e29b-41d4-a716-446655440006', 
     name: 'Partner Satu', 
     code: 'PARTNER1', 
     password: '123', 
@@ -82,7 +85,14 @@ const get = <T>(key: string, defaultVal: T): T => {
   const stored = localStorage.getItem(key);
   if (!stored) return defaultVal;
   try {
-    return JSON.parse(stored);
+    const parsed = JSON.parse(stored);
+    // Force update Supabase credentials from Env Vars if local storage is missing them but Env exists
+    if (key === STORAGE_KEYS.SETTINGS && (!parsed.supabaseUrl || !parsed.supabaseKey)) {
+        const env = (import.meta as any).env;
+        if (env?.VITE_SUPABASE_URL) parsed.supabaseUrl = env.VITE_SUPABASE_URL;
+        if (env?.VITE_SUPABASE_ANON_KEY) parsed.supabaseKey = env.VITE_SUPABASE_ANON_KEY;
+    }
+    return parsed;
   } catch {
     return defaultVal;
   }

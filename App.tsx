@@ -106,6 +106,22 @@ create policy "Public Access Affiliates" on affiliates for all using (true) with
 create policy "Public Access Orders" on orders for all using (true) with check (true);
 `;
 
+// --- Helpers ---
+// Generate a simple UUID-like string if crypto.randomUUID is not available
+function generateUUID() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+// Check if string is a valid UUID
+function isValidUUID(uuid: string) {
+    const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return regex.test(uuid);
+}
+
 // --- Context & State ---
 
 const AppContext = React.createContext<{
@@ -261,14 +277,14 @@ const AdminProducts: React.FC = () => {
     if (currentProduct.id) {
       newProducts = newProducts.map(p => p.id === currentProduct.id ? { ...p, ...currentProduct } as Product : p);
     } else {
-      const newId = Date.now().toString();
+      const newId = generateUUID();
       const productToAdd: Product = {
         id: newId,
         name: currentProduct.name!,
         price: Number(currentProduct.price),
         description: currentProduct.description || '',
         category: currentProduct.category || 'General',
-        image: currentProduct.image || `https://picsum.photos/400/400?random=${newId}`,
+        image: currentProduct.image || `https://picsum.photos/400/400?random=${Date.now()}`,
         discountPrice: currentProduct.discountPrice ? Number(currentProduct.discountPrice) : undefined,
         fileUrl: currentProduct.fileUrl || '',
       };
@@ -389,7 +405,7 @@ const AdminVouchers: React.FC = () => {
     if (currentVoucher.id) {
       newVouchers = newVouchers.map(v => v.id === currentVoucher.id ? { ...v, ...currentVoucher } as Voucher : v);
     } else {
-      const newId = Date.now().toString();
+      const newId = generateUUID();
       newVouchers.push({ id: newId, code: currentVoucher.code.toUpperCase(), type: currentVoucher.type || 'FIXED', value: Number(currentVoucher.value), isActive: currentVoucher.isActive !== undefined ? currentVoucher.isActive : true });
     }
     updateVouchers(newVouchers);
@@ -458,7 +474,7 @@ const AdminAffiliates: React.FC = () => {
       newAffs = newAffs.map(a => a.id === currentAff.id ? { ...a, ...currentAff } as Affiliate : a);
     } else {
       newAffs.push({
-        id: Date.now().toString(),
+        id: generateUUID(),
         name: currentAff.name!,
         code: currentAff.code!.toUpperCase(),
         password: currentAff.password!,
@@ -576,9 +592,18 @@ const AdminDatabase: React.FC = () => {
     
     setIsSyncing(true);
     try {
+        // --- Helper to fix legacy IDs (like "1") to proper UUIDs ---
+        const ensureUuid = (item: any) => {
+            if (!isValidUUID(item.id)) {
+                console.log(`Fixing ID for ${item.name || item.code}: ${item.id} -> new UUID`);
+                return { ...item, id: generateUUID() };
+            }
+            return item;
+        };
+
         // Sync Products
         if (products.length > 0) {
-            const dbProducts = products.map(p => ({
+            const dbProducts = products.map(ensureUuid).map(p => ({
                 id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
                 discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
             }));
@@ -588,7 +613,7 @@ const AdminDatabase: React.FC = () => {
 
         // Sync Vouchers
         if (vouchers.length > 0) {
-            const dbVouchers = vouchers.map(v => ({
+            const dbVouchers = vouchers.map(ensureUuid).map(v => ({
                 id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
             }));
             const { error } = await supabase.from('vouchers').upsert(dbVouchers);
@@ -597,7 +622,7 @@ const AdminDatabase: React.FC = () => {
 
         // Sync Affiliates
         if (affiliates.length > 0) {
-            const dbAffs = affiliates.map(a => ({
+            const dbAffs = affiliates.map(ensureUuid).map(a => ({
                 id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
                 total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
             }));
@@ -629,7 +654,7 @@ const AdminDatabase: React.FC = () => {
                 <h4 className="font-bold text-white mb-2">Sync Dashboard</h4>
                 <p className="text-gray-400 text-sm mb-4">
                     Gunakan tombol di bawah ini untuk mengirim data yang ada di panel admin ini ke database cloud. 
-                    Berguna saat pertama kali setting atau jika Anda mengedit data secara offline/lokal.
+                    Sistem akan otomatis memperbaiki format ID (UUID) jika diperlukan.
                 </p>
                 <button 
                     onClick={handleSync} 
@@ -637,7 +662,7 @@ const AdminDatabase: React.FC = () => {
                     className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
                     {isSyncing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-cloud-upload-alt"></i>}
-                    {isSyncing ? "Uploading Data..." : "UPLOAD LOCAL DATA TO CLOUD"}
+                    {isSyncing ? "Uploading & Fixing IDs..." : "UPLOAD LOCAL DATA TO CLOUD"}
                 </button>
             </div>
 
@@ -1132,9 +1157,14 @@ export default function App() {
         id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
         discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
       }));
-      supabase.from('products').upsert(dbProducts).then(({error}) => {
-        if(error) console.error("Product Sync Error:", error);
-      });
+      // Auto-fixing invalid IDs inside useEffect is risky, rely on manual sync button for bulk fix
+      // Only upsert valid UUIDs here to prevent background errors
+      const validProducts = dbProducts.filter(p => isValidUUID(p.id));
+      if (validProducts.length > 0) {
+          supabase.from('products').upsert(validProducts).then(({error}) => {
+            if(error) console.error("Product Sync Error:", error);
+          });
+      }
     }
   }, [products, supabase]);
 
@@ -1146,7 +1176,10 @@ export default function App() {
       const dbVouchers = vouchers.map(v => ({
         id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
       }));
-      supabase.from('vouchers').upsert(dbVouchers).then(({error}) => { if(error) console.error(error); });
+      const validVouchers = dbVouchers.filter(v => isValidUUID(v.id));
+      if (validVouchers.length > 0) {
+         supabase.from('vouchers').upsert(validVouchers).then(({error}) => { if(error) console.error(error); });
+      }
     }
   }, [vouchers, supabase]);
 
@@ -1157,7 +1190,10 @@ export default function App() {
         id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
         total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
       }));
-      supabase.from('affiliates').upsert(dbAffs).then(({error}) => { if(error) console.error(error); });
+      const validAffs = dbAffs.filter(a => isValidUUID(a.id));
+      if (validAffs.length > 0) {
+         supabase.from('affiliates').upsert(validAffs).then(({error}) => { if(error) console.error(error); });
+      }
     }
   }, [affiliates, supabase]);
 
