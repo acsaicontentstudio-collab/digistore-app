@@ -18,6 +18,7 @@ export interface PaymentMethod {
   accountName?: string;
   description?: string;
   logo?: string;
+  isActive?: boolean;
 }
 
 export interface StoreSettings {

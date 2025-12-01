@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -153,6 +154,7 @@ const AppContext = React.createContext<{
   supabase: SupabaseClient | null;
   isCloudConnected: boolean;
   debugDataCount: number;
+  resetLocalData: () => void;
 } | null>(null);
 
 const useAppContext = () => {
@@ -567,10 +569,18 @@ const AdminAffiliates: React.FC = () => {
 };
 
 const AdminSettings: React.FC = () => {
-  const { settings, updateSettings, paymentMethods } = useAppContext();
+  const { settings, updateSettings, paymentMethods, updatePayments } = useAppContext();
   const [formData, setFormData] = useState(settings);
+  const [payments, setPayments] = useState(paymentMethods);
+  
   useEffect(() => { setFormData(settings); }, [settings]);
-  const handleSave = () => { updateSettings(formData); alert('Pengaturan berhasil disimpan!'); };
+  useEffect(() => { setPayments(paymentMethods); }, [paymentMethods]);
+
+  const handleSave = () => { 
+      updateSettings(formData); 
+      updatePayments(payments);
+      alert('Pengaturan dan Pembayaran berhasil disimpan secara lokal. Jangan lupa klik "Upload to Cloud" di menu Database untuk sinkronisasi ke Customer.'); 
+  };
 
   return (
     <div className="p-6 pb-24 max-w-4xl mx-auto">
@@ -585,14 +595,35 @@ const AdminSettings: React.FC = () => {
             <div className="md:col-span-2"><label className="block text-sm text-gray-400 mb-1">Deskripsi</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
           </div>
         </div>
-        <button onClick={handleSave} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan Perubahan</button>
+
+        <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
+            <h3 className="text-lg font-bold text-white mb-4 border-b border-dark-700 pb-2">Rekening & Pembayaran</h3>
+            {payments.map((pm, idx) => (
+                <div key={pm.id} className="mb-4 pb-4 border-b border-dark-700 last:border-0 last:pb-0">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="font-bold text-primary">{pm.type} - {pm.name}</span>
+                        <input type="checkbox" checked={pm.isActive !== false} onChange={e => {
+                             const newP = [...payments]; newP[idx].isActive = e.target.checked; setPayments(newP);
+                        }} className="accent-primary w-4 h-4" />
+                    </div>
+                    {pm.type === 'BANK' || pm.type === 'E-WALLET' ? (
+                        <div className="grid grid-cols-2 gap-2">
+                            <input value={pm.accountNumber || ''} onChange={e => { const newP = [...payments]; newP[idx].accountNumber = e.target.value; setPayments(newP); }} placeholder="No. Rekening" className="bg-dark-900 border border-dark-700 rounded px-2 py-1 text-xs text-white" />
+                            <input value={pm.accountName || ''} onChange={e => { const newP = [...payments]; newP[idx].accountName = e.target.value; setPayments(newP); }} placeholder="Atas Nama" className="bg-dark-900 border border-dark-700 rounded px-2 py-1 text-xs text-white" />
+                        </div>
+                    ) : <p className="text-xs text-gray-500">{pm.description}</p>}
+                </div>
+            ))}
+        </div>
+
+        <button onClick={handleSave} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan Semua Perubahan</button>
       </div>
     </div>
   );
 };
 
 const AdminDatabase: React.FC = () => {
-  const { settings, updateSettings, products, vouchers, affiliates, supabase } = useAppContext();
+  const { settings, updateSettings, products, vouchers, affiliates, paymentMethods, supabase, resetLocalData, updateProducts, updateVouchers, updateAffiliates, updatePayments } = useAppContext();
   const [formData, setFormData] = useState(settings);
   const [showSql, setShowSql] = useState(!settings.supabaseUrl); // Auto show if no URL
   const [isSyncing, setIsSyncing] = useState(false);
@@ -600,22 +631,25 @@ const AdminDatabase: React.FC = () => {
   // Fungsi untuk push data local ke Supabase
   const handleSync = async () => {
     if (!supabase) return alert("Supabase belum terkoneksi! Masukkan URL & Key, Simpan, lalu Refresh.");
-    if (!confirm("PERHATIAN: Ini akan MENGUPLOAD semua data produk, voucher, & partner yang ada di panel admin ini ke database cloud. Data di cloud akan ditimpa/ditambah. Lanjutkan?")) return;
+    if (!confirm("PERHATIAN: Ini akan MENGUPLOAD semua data produk, voucher, partner, dan pengaturan toko yang ada di panel admin ini ke database cloud. Data di cloud akan ditimpa. Lanjutkan?")) return;
     
     setIsSyncing(true);
     try {
         // --- Helper to fix legacy IDs (like "1") to proper UUIDs ---
         const ensureUuid = (item: any) => {
             if (!isValidUUID(item.id)) {
-                console.log(`Fixing ID for ${item.name || item.code}: ${item.id} -> new UUID`);
                 return { ...item, id: generateUUID() };
             }
             return item;
         };
 
-        // Sync Products
+        // 1. Sync Products
         if (products.length > 0) {
-            const dbProducts = products.map(ensureUuid).map(p => ({
+            const fixedProducts = products.map(ensureUuid);
+            // Update local state first to prevent duplicate IDs on next sync
+            updateProducts(fixedProducts);
+            
+            const dbProducts = fixedProducts.map(p => ({
                 id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
                 discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
             }));
@@ -623,18 +657,24 @@ const AdminDatabase: React.FC = () => {
             if (error) throw error;
         }
 
-        // Sync Vouchers
+        // 2. Sync Vouchers
         if (vouchers.length > 0) {
-            const dbVouchers = vouchers.map(ensureUuid).map(v => ({
+            const fixedVouchers = vouchers.map(ensureUuid);
+            updateVouchers(fixedVouchers);
+
+            const dbVouchers = fixedVouchers.map(v => ({
                 id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
             }));
             const { error } = await supabase.from('vouchers').upsert(dbVouchers);
             if (error) throw error;
         }
 
-        // Sync Affiliates
+        // 3. Sync Affiliates
         if (affiliates.length > 0) {
-            const dbAffs = affiliates.map(ensureUuid).map(a => ({
+            const fixedAffs = affiliates.map(ensureUuid);
+            updateAffiliates(fixedAffs);
+
+            const dbAffs = fixedAffs.map(a => ({
                 id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
                 total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
             }));
@@ -642,7 +682,36 @@ const AdminDatabase: React.FC = () => {
             if (error) throw error;
         }
 
-        alert("Upload Berhasil! Data lokal admin sekarang sudah tersimpan di Supabase.");
+        // 4. Sync Store Settings (Single Row ID: settings_01)
+        const dbSettings = {
+            id: 'settings_01',
+            store_name: settings.storeName,
+            address: settings.address,
+            whatsapp: settings.whatsapp,
+            email: settings.email,
+            description: settings.description,
+            logo_url: settings.logoUrl,
+            tripay_api_key: settings.tripayApiKey,
+            tripay_private_key: settings.tripayPrivateKey,
+            tripay_merchant_code: settings.tripayMerchantCode
+        };
+        const { error: setErr } = await supabase.from('store_settings').upsert(dbSettings);
+        if (setErr) throw setErr;
+
+        // 5. Sync Payment Methods
+        if (paymentMethods.length > 0) {
+             const fixedPayments = paymentMethods.map(ensureUuid);
+             updatePayments(fixedPayments);
+
+             const dbPayments = fixedPayments.map(p => ({
+                 id: p.id, type: p.type, name: p.name, account_number: p.accountNumber, 
+                 account_name: p.accountName, description: p.description, logo: p.logo, is_active: p.isActive
+             }));
+             const { error: payErr } = await supabase.from('payment_methods').upsert(dbPayments);
+             if (payErr) throw payErr;
+        }
+
+        alert("Upload Berhasil! Semua data (Produk, Voucher, Pengaturan, Pembayaran) sudah tersimpan di Supabase.");
     } catch (e: any) {
         alert("Gagal upload: " + (e.message || e));
         console.error(e);
@@ -666,16 +735,25 @@ const AdminDatabase: React.FC = () => {
                 <h4 className="font-bold text-white mb-2">Sync Dashboard</h4>
                 <p className="text-gray-400 text-sm mb-4">
                     Gunakan tombol di bawah ini untuk mengirim data yang ada di panel admin ini ke database cloud. 
-                    Sistem akan otomatis memperbaiki format ID (UUID) jika diperlukan.
+                    Sistem akan otomatis memperbaiki format ID (UUID) dan menyinkronkan pengaturan toko.
                 </p>
-                <button 
-                    onClick={handleSync} 
-                    disabled={isSyncing || !supabase}
-                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                    {isSyncing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-cloud-upload-alt"></i>}
-                    {isSyncing ? "Uploading & Fixing IDs..." : "UPLOAD LOCAL DATA TO CLOUD"}
-                </button>
+                <div className="flex gap-4">
+                     <button 
+                        onClick={handleSync} 
+                        disabled={isSyncing || !supabase}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                        {isSyncing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-cloud-upload-alt"></i>}
+                        {isSyncing ? "Uploading..." : "UPLOAD LOCAL DATA TO CLOUD"}
+                    </button>
+                     <button 
+                        onClick={() => { if(confirm("Ini akan menghapus data di browser ini dan mengambil ulang dari Cloud/Default. Yakin?")) resetLocalData(); }}
+                        className="px-6 py-3 bg-red-600/20 hover:bg-red-600/40 text-red-500 border border-red-600/50 rounded-lg font-medium"
+                        title="Reset Local Data"
+                    >
+                        <i className="fas fa-redo"></i> Reset Local
+                    </button>
+                </div>
             </div>
 
             <div className="space-y-4 pt-4 border-t border-dark-700">
@@ -1164,6 +1242,34 @@ export default function App() {
         setAffiliates(mappedAff);
         DataService.saveAffiliates(mappedAff);
       }
+
+      const { data: settingsData } = await supabase.from('store_settings').select('*').single();
+      if (settingsData) {
+         const newSettings: StoreSettings = {
+            ...settings, // Keep existing credentials if any
+            storeName: settingsData.store_name,
+            address: settingsData.address,
+            whatsapp: settingsData.whatsapp,
+            email: settingsData.email,
+            description: settingsData.description,
+            logoUrl: settingsData.logo_url,
+            tripayApiKey: settingsData.tripay_api_key,
+            tripayPrivateKey: settingsData.tripay_private_key,
+            tripayMerchantCode: settingsData.tripay_merchant_code
+         };
+         setSettings(newSettings);
+         DataService.saveSettings(newSettings);
+      }
+
+      const { data: payData } = await supabase.from('payment_methods').select('*');
+      if (payData && payData.length > 0) {
+          const mappedPayments: PaymentMethod[] = payData.map((p: any) => ({
+              id: p.id, type: p.type, name: p.name, accountNumber: p.account_number,
+              accountName: p.account_name, description: p.description, logo: p.logo, isActive: p.is_active
+          }));
+          setPaymentMethods(mappedPayments);
+          DataService.savePayments(mappedPayments);
+      }
       
       setIsCloudConnected(true);
     };
@@ -1171,61 +1277,24 @@ export default function App() {
     fetchData();
   }, [supabase]);
 
-  // Sync TO Supabase (Upsert logic)
-  useEffect(() => { 
-    DataService.saveSettings(settings); 
-  }, [settings]);
-
-  useEffect(() => { 
-    DataService.saveProducts(products);
-    if (supabase && products.length > 0 && isCloudConnected) {
-      const dbProducts = products.map(p => ({
-        id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
-        discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
-      }));
-      const validProducts = dbProducts.filter(p => isValidUUID(p.id));
-      if (validProducts.length > 0) {
-          supabase.from('products').upsert(validProducts).then(({error}) => {
-            if(error) console.error("Product Sync Error:", error);
-          });
-      }
-    }
-  }, [products, supabase, isCloudConnected]);
-
+  // Sync TO Supabase (Upsert logic) - Note: Only Products/Settings etc are auto-synced locally. Cloud sync is manual via AdminDatabase.
+  // We keep local sync here:
+  useEffect(() => { DataService.saveSettings(settings); }, [settings]);
+  useEffect(() => { DataService.saveProducts(products); }, [products]);
   useEffect(() => { DataService.savePayments(paymentMethods); }, [paymentMethods]);
-
-  useEffect(() => { 
-    DataService.saveVouchers(vouchers);
-    if (supabase && vouchers.length > 0 && isCloudConnected) {
-      const dbVouchers = vouchers.map(v => ({
-        id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
-      }));
-      const validVouchers = dbVouchers.filter(v => isValidUUID(v.id));
-      if (validVouchers.length > 0) {
-         supabase.from('vouchers').upsert(validVouchers).then(({error}) => { if(error) console.error(error); });
-      }
-    }
-  }, [vouchers, supabase, isCloudConnected]);
-
-  useEffect(() => { 
-    DataService.saveAffiliates(affiliates);
-    if (supabase && affiliates.length > 0 && isCloudConnected) {
-      const dbAffs = affiliates.map(a => ({
-        id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
-        total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
-      }));
-      const validAffs = dbAffs.filter(a => isValidUUID(a.id));
-      if (validAffs.length > 0) {
-         supabase.from('affiliates').upsert(validAffs).then(({error}) => { if(error) console.error(error); });
-      }
-    }
-  }, [affiliates, supabase, isCloudConnected]);
+  useEffect(() => { DataService.saveVouchers(vouchers); }, [vouchers]);
+  useEffect(() => { DataService.saveAffiliates(affiliates); }, [affiliates]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
       const existing = prev.find(p => p.id === product.id);
       return existing ? prev.map(p => p.id === product.id ? { ...p, quantity: p.quantity + 1 } : p) : [...prev, { ...product, quantity: 1 }];
     });
+  };
+
+  const resetLocalData = () => {
+      localStorage.clear();
+      window.location.reload();
   };
 
   const login = (role: 'ADMIN' | 'CUSTOMER' | 'AFFILIATE', name: string, id?: string) => setUser({ role, name, id });
@@ -1242,7 +1311,8 @@ export default function App() {
       referralCode, setReferralCode,
       supabase,
       isCloudConnected,
-      debugDataCount
+      debugDataCount,
+      resetLocalData
     }}>
       <Router>
         <AppContent />
