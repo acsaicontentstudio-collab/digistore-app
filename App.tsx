@@ -107,7 +107,6 @@ create policy "Public Access Orders" on orders for all using (true) with check (
 `;
 
 // --- Helpers ---
-// Generate a simple UUID-like string if crypto.randomUUID is not available
 function generateUUID() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -116,7 +115,6 @@ function generateUUID() {
     });
 }
 
-// Check if string is a valid UUID
 function isValidUUID(uuid: string) {
     const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     return regex.test(uuid);
@@ -145,6 +143,7 @@ const AppContext = React.createContext<{
   referralCode: string | null;
   setReferralCode: (code: string | null) => void;
   supabase: SupabaseClient | null;
+  isCloudConnected: boolean;
 } | null>(null);
 
 const useAppContext = () => {
@@ -197,10 +196,15 @@ const ProductCard: React.FC<{ product: Product, onAdd: () => void }> = ({ produc
 // --- Admin Views ---
 
 const AdminDashboard: React.FC = () => {
-  const { products, vouchers, affiliates } = useAppContext();
+  const { products, vouchers, affiliates, isCloudConnected } = useAppContext();
   return (
     <div className="p-6">
-      <h2 className="text-2xl font-bold text-white mb-6">Dashboard</h2>
+      <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-white">Dashboard</h2>
+          <div className={`px-3 py-1 rounded-full text-xs font-bold border ${isCloudConnected ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-gray-500/10 text-gray-400 border-gray-500/30'}`}>
+              {isCloudConnected ? '● Cloud Connected' : '○ Local Mode'}
+          </div>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
           <div className="flex items-center justify-between">
@@ -263,7 +267,6 @@ const AdminProducts: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [currentProduct, setCurrentProduct] = useState<Partial<Product>>({});
 
-  // Generate dynamic category list
   const availableCategories = useMemo(() => {
     const defaults = ['Software', 'E-book', 'Course', 'Template'];
     const fromProducts = products.map(p => p.category);
@@ -957,7 +960,7 @@ const CustomerCart: React.FC = () => {
 // --- Layouts ---
 
 const CustomerLayout: React.FC = () => {
-  const { cart, user } = useAppContext();
+  const { cart, user, isCloudConnected } = useAppContext();
   const location = useLocation();
 
   return (
@@ -982,6 +985,8 @@ const CustomerLayout: React.FC = () => {
           <Route path="/history" element={<div className="p-10 text-center">Riwayat Pesanan (Fitur Mendatang)</div>} />
         </Routes>
       </div>
+      
+      {/* Footer / Mobile Nav */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-dark-800 border-t border-dark-700 pb-safe z-50">
         <div className="grid grid-cols-4 h-16">
           <Link to="/" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/' ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-store mb-1"></i><span className="text-[10px] font-medium">Toko</span></Link>
@@ -989,6 +994,16 @@ const CustomerLayout: React.FC = () => {
            <Link to="/history" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/history' ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-history mb-1"></i><span className="text-[10px] font-medium">Riwayat</span></Link>
           <Link to="/account" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname.startsWith('/account') ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-user mb-1"></i><span className="text-[10px] font-medium">Akun</span></Link>
         </div>
+        <div className="text-[10px] text-center pb-2 bg-dark-800 opacity-50">
+            {isCloudConnected ? <span className="text-green-500">● Cloud Connected</span> : <span>○ Local Mode</span>}
+        </div>
+      </div>
+      
+      {/* Desktop Footer Status */}
+      <div className="hidden md:block fixed bottom-4 right-4 z-50">
+         <div className={`px-3 py-1 rounded-full text-xs font-bold border shadow-lg ${isCloudConnected ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>
+              {isCloudConnected ? '● Cloud Connected' : '○ Local Mode'}
+          </div>
       </div>
     </div>
   );
@@ -1084,6 +1099,7 @@ export default function App() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [referralCode, setReferralCode] = useState<string | null>(null);
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
 
   // Initialize Supabase Client if credentials exist
   const supabase = useMemo(() => {
@@ -1113,6 +1129,7 @@ export default function App() {
           image: p.image, fileUrl: p.file_url, isPopular: p.is_popular
         }));
         setProducts(mappedProducts);
+        DataService.saveProducts(mappedProducts); // Force save local
       }
 
       const { data: vouchData } = await supabase.from('vouchers').select('*');
@@ -1121,6 +1138,7 @@ export default function App() {
           id: v.id, code: v.code, type: v.type, value: Number(v.value), isActive: v.is_active
         }));
         setVouchers(mappedVouchers);
+        DataService.saveVouchers(mappedVouchers);
       }
       
       const { data: affData } = await supabase.from('affiliates').select('*');
@@ -1131,34 +1149,27 @@ export default function App() {
           bankDetails: a.bank_details, isActive: a.is_active
         }));
         setAffiliates(mappedAff);
+        DataService.saveAffiliates(mappedAff);
       }
-
-      // Sync Settings (only if ID exists)
-      // Note: Settings usually single row, simple logic here
+      
+      setIsCloudConnected(true);
     };
 
     fetchData();
   }, [supabase]);
 
   // Sync TO Supabase (Upsert logic)
-  // We use a debounce-like approach or just direct effects. 
-  // Warning: Base64 images are heavy for Supabase rows. Ideally use Storage, but keeping simple as requested.
-  
   useEffect(() => { 
     DataService.saveSettings(settings); 
-    // Settings sync skipped for simplicity to avoid loop, assumes local first
   }, [settings]);
 
   useEffect(() => { 
     DataService.saveProducts(products);
-    if (supabase && products.length > 0) {
-      // Map back to snake_case for DB
+    if (supabase && products.length > 0 && isCloudConnected) {
       const dbProducts = products.map(p => ({
         id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
         discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
       }));
-      // Auto-fixing invalid IDs inside useEffect is risky, rely on manual sync button for bulk fix
-      // Only upsert valid UUIDs here to prevent background errors
       const validProducts = dbProducts.filter(p => isValidUUID(p.id));
       if (validProducts.length > 0) {
           supabase.from('products').upsert(validProducts).then(({error}) => {
@@ -1166,13 +1177,13 @@ export default function App() {
           });
       }
     }
-  }, [products, supabase]);
+  }, [products, supabase, isCloudConnected]);
 
   useEffect(() => { DataService.savePayments(paymentMethods); }, [paymentMethods]);
 
   useEffect(() => { 
     DataService.saveVouchers(vouchers);
-    if (supabase && vouchers.length > 0) {
+    if (supabase && vouchers.length > 0 && isCloudConnected) {
       const dbVouchers = vouchers.map(v => ({
         id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
       }));
@@ -1181,11 +1192,11 @@ export default function App() {
          supabase.from('vouchers').upsert(validVouchers).then(({error}) => { if(error) console.error(error); });
       }
     }
-  }, [vouchers, supabase]);
+  }, [vouchers, supabase, isCloudConnected]);
 
   useEffect(() => { 
     DataService.saveAffiliates(affiliates);
-    if (supabase && affiliates.length > 0) {
+    if (supabase && affiliates.length > 0 && isCloudConnected) {
       const dbAffs = affiliates.map(a => ({
         id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
         total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
@@ -1195,7 +1206,7 @@ export default function App() {
          supabase.from('affiliates').upsert(validAffs).then(({error}) => { if(error) console.error(error); });
       }
     }
-  }, [affiliates, supabase]);
+  }, [affiliates, supabase, isCloudConnected]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -1216,7 +1227,8 @@ export default function App() {
       user, login, logout: () => setUser(null),
       paymentMethods, updatePayments: setPaymentMethods,
       referralCode, setReferralCode,
-      supabase 
+      supabase,
+      isCloudConnected
     }}>
       <Router>
         <AppContent />
