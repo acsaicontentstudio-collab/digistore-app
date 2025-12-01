@@ -104,10 +104,6 @@ create policy "Public Access Payments" on payment_methods for all using (true) w
 create policy "Public Access Vouchers" on vouchers for all using (true) with check (true);
 create policy "Public Access Affiliates" on affiliates for all using (true) with check (true);
 create policy "Public Access Orders" on orders for all using (true) with check (true);
-
--- Initial Data (Optional - run only if empty)
--- insert into store_settings (id, store_name, address, whatsapp, email, description)
--- values ('default_settings', 'DigiStore Pro', 'Jl. Digital No. 1', '6281234567890', 'admin@digistore.com', 'Toko produk digital terpercaya.');
 `;
 
 // --- Context & State ---
@@ -132,6 +128,7 @@ const AppContext = React.createContext<{
   updatePayments: (p: PaymentMethod[]) => void;
   referralCode: string | null;
   setReferralCode: (code: string | null) => void;
+  supabase: SupabaseClient | null;
 } | null>(null);
 
 const useAppContext = () => {
@@ -567,23 +564,90 @@ const AdminSettings: React.FC = () => {
 };
 
 const AdminDatabase: React.FC = () => {
-  const { settings, updateSettings } = useAppContext();
+  const { settings, updateSettings, products, vouchers, affiliates, supabase } = useAppContext();
   const [formData, setFormData] = useState(settings);
   const [showSql, setShowSql] = useState(!settings.supabaseUrl); // Auto show if no URL
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Fungsi untuk push data local ke Supabase
+  const handleSync = async () => {
+    if (!supabase) return alert("Supabase belum terkoneksi! Masukkan URL & Key, Simpan, lalu Refresh.");
+    if (!confirm("PERHATIAN: Ini akan MENGUPLOAD semua data produk, voucher, & partner yang ada di panel admin ini ke database cloud. Data di cloud akan ditimpa/ditambah. Lanjutkan?")) return;
+    
+    setIsSyncing(true);
+    try {
+        // Sync Products
+        if (products.length > 0) {
+            const dbProducts = products.map(p => ({
+                id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
+                discount_price: p.discountPrice, image: p.image, file_url: p.fileUrl, is_popular: p.isPopular
+            }));
+            const { error } = await supabase.from('products').upsert(dbProducts);
+            if (error) throw error;
+        }
+
+        // Sync Vouchers
+        if (vouchers.length > 0) {
+            const dbVouchers = vouchers.map(v => ({
+                id: v.id, code: v.code, type: v.type, value: v.value, is_active: v.isActive
+            }));
+            const { error } = await supabase.from('vouchers').upsert(dbVouchers);
+            if (error) throw error;
+        }
+
+        // Sync Affiliates
+        if (affiliates.length > 0) {
+            const dbAffs = affiliates.map(a => ({
+                id: a.id, name: a.name, code: a.code, password: a.password, commission_rate: a.commissionRate,
+                total_earnings: a.totalEarnings, bank_details: a.bankDetails, is_active: a.isActive
+            }));
+            const { error } = await supabase.from('affiliates').upsert(dbAffs);
+            if (error) throw error;
+        }
+
+        alert("Upload Berhasil! Data lokal admin sekarang sudah tersimpan di Supabase.");
+    } catch (e: any) {
+        alert("Gagal upload: " + (e.message || e));
+        console.error(e);
+    } finally {
+        setIsSyncing(false);
+    }
+  };
 
   return (
     <div className="p-6 pb-24 max-w-4xl mx-auto">
        <h2 className="text-2xl font-bold text-white mb-6">Database & API</h2>
        <div className="space-y-6">
           <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
-            <h3 className="text-lg font-bold text-green-400 mb-4"><i className="fas fa-database"></i> Supabase Integration</h3>
-            <div className="space-y-4">
-               <div><label className="text-sm text-gray-400">Supabase URL</label><input type="password" value={formData.supabaseUrl || ''} onChange={e => setFormData({...formData, supabaseUrl: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
-               <div><label className="text-sm text-gray-400">Anon Key</label><input type="password" value={formData.supabaseKey || ''} onChange={e => setFormData({...formData, supabaseKey: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" /></div>
+            <h3 className="text-lg font-bold text-green-400 mb-4 flex items-center gap-2">
+                <i className="fas fa-database"></i> Supabase Integration
+                {supabase && <span className="bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/30">Connected</span>}
+            </h3>
+            
+            {/* Sync Dashboard Area */}
+            <div className="bg-dark-900/50 p-4 rounded-lg border border-dark-700 mb-6">
+                <h4 className="font-bold text-white mb-2">Sync Dashboard</h4>
+                <p className="text-gray-400 text-sm mb-4">
+                    Gunakan tombol di bawah ini untuk mengirim data yang ada di panel admin ini ke database cloud. 
+                    Berguna saat pertama kali setting atau jika Anda mengedit data secara offline/lokal.
+                </p>
+                <button 
+                    onClick={handleSync} 
+                    disabled={isSyncing || !supabase}
+                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                    {isSyncing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-cloud-upload-alt"></i>}
+                    {isSyncing ? "Uploading Data..." : "UPLOAD LOCAL DATA TO CLOUD"}
+                </button>
+            </div>
+
+            <div className="space-y-4 pt-4 border-t border-dark-700">
+               <div><label className="text-sm text-gray-400">Supabase URL</label><input type="password" value={formData.supabaseUrl || ''} onChange={e => setFormData({...formData, supabaseUrl: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" placeholder="https://xyz.supabase.co" /></div>
+               <div><label className="text-sm text-gray-400">Anon Key</label><input type="password" value={formData.supabaseKey || ''} onChange={e => setFormData({...formData, supabaseKey: e.target.value})} className="w-full bg-dark-900 border border-dark-700 rounded-lg px-4 py-2 text-white" placeholder="eyJh..." /></div>
                <div className="mt-4"><button onClick={() => setShowSql(!showSql)} className="text-primary text-sm font-bold"> {showSql ? 'Hide SQL' : 'Show SQL Schema'} </button>{showSql && <textarea readOnly value={SUPABASE_SCHEMA} className="w-full h-64 bg-dark-900 border border-dark-700 rounded-lg p-4 mt-2 text-xs font-mono text-gray-300" />}</div>
             </div>
           </div>
-          <button onClick={() => { updateSettings(formData); alert('Saved. Please refresh to sync with database.'); }} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan</button>
+          <button onClick={() => { updateSettings(formData); alert('Saved. Please refresh page.'); }} className="w-full bg-primary hover:bg-indigo-600 text-white font-bold py-3 rounded-xl">Simpan Konfigurasi</button>
        </div>
     </div>
   );
@@ -1115,7 +1179,8 @@ export default function App() {
       cart, addToCart, removeFromCart: (id) => setCart(p => p.filter(x => x.id !== id)), clearCart: () => setCart([]),
       user, login, logout: () => setUser(null),
       paymentMethods, updatePayments: setPaymentMethods,
-      referralCode, setReferralCode
+      referralCode, setReferralCode,
+      supabase 
     }}>
       <Router>
         <AppContent />
