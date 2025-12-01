@@ -97,6 +97,14 @@ alter table vouchers enable row level security;
 alter table affiliates enable row level security;
 alter table orders enable row level security;
 
+-- DROP POLICIES IF EXIST (Fix for Re-running script)
+drop policy if exists "Public Access Products" on products;
+drop policy if exists "Public Access Settings" on store_settings;
+drop policy if exists "Public Access Payments" on payment_methods;
+drop policy if exists "Public Access Vouchers" on vouchers;
+drop policy if exists "Public Access Affiliates" on affiliates;
+drop policy if exists "Public Access Orders" on orders;
+
 -- Create Policies (Open access for simplicity in this demo, adjust for production)
 create policy "Public Access Products" on products for all using (true) with check (true);
 create policy "Public Access Settings" on store_settings for all using (true) with check (true);
@@ -144,6 +152,7 @@ const AppContext = React.createContext<{
   setReferralCode: (code: string | null) => void;
   supabase: SupabaseClient | null;
   isCloudConnected: boolean;
+  debugDataCount: number;
 } | null>(null);
 
 const useAppContext = () => {
@@ -960,7 +969,7 @@ const CustomerCart: React.FC = () => {
 // --- Layouts ---
 
 const CustomerLayout: React.FC = () => {
-  const { cart, user, isCloudConnected } = useAppContext();
+  const { cart, user, isCloudConnected, debugDataCount } = useAppContext();
   const location = useLocation();
 
   return (
@@ -994,15 +1003,16 @@ const CustomerLayout: React.FC = () => {
            <Link to="/history" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname === '/history' ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-history mb-1"></i><span className="text-[10px] font-medium">Riwayat</span></Link>
           <Link to="/account" className={`flex flex-col items-center justify-center w-full h-full ${location.pathname.startsWith('/account') ? 'text-primary' : 'text-gray-400'}`}><i className="fas fa-user mb-1"></i><span className="text-[10px] font-medium">Akun</span></Link>
         </div>
-        <div className="text-[10px] text-center pb-2 bg-dark-800 opacity-50">
+        <div className="text-[10px] text-center pb-2 bg-dark-800 opacity-50 flex justify-center gap-2">
             {isCloudConnected ? <span className="text-green-500">● Cloud Connected</span> : <span>○ Local Mode</span>}
+            <span className="text-gray-500">| Loaded: {debugDataCount} items</span>
         </div>
       </div>
       
       {/* Desktop Footer Status */}
       <div className="hidden md:block fixed bottom-4 right-4 z-50">
          <div className={`px-3 py-1 rounded-full text-xs font-bold border shadow-lg ${isCloudConnected ? 'bg-green-500/10 text-green-400 border-green-500/30' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>
-              {isCloudConnected ? '● Cloud Connected' : '○ Local Mode'}
+              {isCloudConnected ? '● Cloud Connected' : '○ Local Mode'} | Items: {debugDataCount}
           </div>
       </div>
     </div>
@@ -1100,6 +1110,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [referralCode, setReferralCode] = useState<string | null>(null);
   const [isCloudConnected, setIsCloudConnected] = useState(false);
+  const [debugDataCount, setDebugDataCount] = useState(0);
 
   // Initialize Supabase Client if credentials exist
   const supabase = useMemo(() => {
@@ -1122,7 +1133,8 @@ export default function App() {
       console.log("Fetching from Supabase...");
       
       const { data: prodData } = await supabase.from('products').select('*');
-      if (prodData && prodData.length > 0) {
+      // Always use cloud data if connected, even if empty, to ensure sync
+      if (prodData) {
         const mappedProducts: Product[] = prodData.map((p: any) => ({
           id: p.id, name: p.name, category: p.category, description: p.description, price: Number(p.price),
           discountPrice: p.discount_price ? Number(p.discount_price) : undefined,
@@ -1130,10 +1142,11 @@ export default function App() {
         }));
         setProducts(mappedProducts);
         DataService.saveProducts(mappedProducts); // Force save local
+        setDebugDataCount(mappedProducts.length);
       }
 
       const { data: vouchData } = await supabase.from('vouchers').select('*');
-      if (vouchData && vouchData.length > 0) {
+      if (vouchData) {
         const mappedVouchers: Voucher[] = vouchData.map((v: any) => ({
           id: v.id, code: v.code, type: v.type, value: Number(v.value), isActive: v.is_active
         }));
@@ -1142,7 +1155,7 @@ export default function App() {
       }
       
       const { data: affData } = await supabase.from('affiliates').select('*');
-      if (affData && affData.length > 0) {
+      if (affData) {
         const mappedAff: Affiliate[] = affData.map((a: any) => ({
           id: a.id, name: a.name, code: a.code, password: a.password,
           commissionRate: Number(a.commission_rate), totalEarnings: Number(a.total_earnings),
@@ -1228,7 +1241,8 @@ export default function App() {
       paymentMethods, updatePayments: setPaymentMethods,
       referralCode, setReferralCode,
       supabase,
-      isCloudConnected
+      isCloudConnected,
+      debugDataCount
     }}>
       <Router>
         <AppContent />
