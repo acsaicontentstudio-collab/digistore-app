@@ -125,6 +125,7 @@ function generateUUID() {
 }
 
 function isValidUUID(uuid: string) {
+    // Basic check for UUID format or generated mock UUIDs
     const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     return regex.test(uuid);
 }
@@ -155,6 +156,7 @@ const AppContext = React.createContext<{
   isCloudConnected: boolean;
   debugDataCount: number;
   resetLocalData: () => void;
+  fetchError: string | null;
 } | null>(null);
 
 const useAppContext = () => {
@@ -207,7 +209,7 @@ const ProductCard: React.FC<{ product: Product, onAdd: () => void }> = ({ produc
 // --- Admin Views ---
 
 const AdminDashboard: React.FC = () => {
-  const { products, vouchers, affiliates, isCloudConnected } = useAppContext();
+  const { products, vouchers, affiliates, isCloudConnected, fetchError } = useAppContext();
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
@@ -216,6 +218,15 @@ const AdminDashboard: React.FC = () => {
               {isCloudConnected ? '● Cloud Connected' : '○ Local Mode'}
           </div>
       </div>
+
+      {fetchError && (
+          <div className="bg-red-500/10 border border-red-500/30 p-4 rounded-lg mb-6 text-red-400 text-sm">
+              <strong>Connection Error:</strong> {fetchError}
+              <br/>
+              Saran: Masuk ke menu "Database & API" dan jalankan ulang SQL Schema.
+          </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-dark-800 p-6 rounded-xl border border-dark-700">
           <div className="flex items-center justify-between">
@@ -646,8 +657,7 @@ const AdminDatabase: React.FC = () => {
         // 1. Sync Products
         if (products.length > 0) {
             const fixedProducts = products.map(ensureUuid);
-            // Update local state first to prevent duplicate IDs on next sync
-            updateProducts(fixedProducts);
+            updateProducts(fixedProducts); // Update local to prevent sync loop of old IDs
             
             const dbProducts = fixedProducts.map(p => ({
                 id: p.id, name: p.name, category: p.category, description: p.description, price: p.price,
@@ -1189,6 +1199,7 @@ export default function App() {
   const [referralCode, setReferralCode] = useState<string | null>(null);
   const [isCloudConnected, setIsCloudConnected] = useState(false);
   const [debugDataCount, setDebugDataCount] = useState(0);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Initialize Supabase Client if credentials exist
   const supabase = useMemo(() => {
@@ -1209,69 +1220,81 @@ export default function App() {
 
     const fetchData = async () => {
       console.log("Fetching from Supabase...");
-      
-      const { data: prodData } = await supabase.from('products').select('*');
-      // Always use cloud data if connected, even if empty, to ensure sync
-      if (prodData) {
-        const mappedProducts: Product[] = prodData.map((p: any) => ({
-          id: p.id, name: p.name, category: p.category, description: p.description, price: Number(p.price),
-          discountPrice: p.discount_price ? Number(p.discount_price) : undefined,
-          image: p.image, fileUrl: p.file_url, isPopular: p.is_popular
-        }));
-        setProducts(mappedProducts);
-        DataService.saveProducts(mappedProducts); // Force save local
-        setDebugDataCount(mappedProducts.length);
-      }
+      setFetchError(null);
+      try {
+          const { data: prodData, error: prodErr } = await supabase.from('products').select('*');
+          if (prodErr) throw prodErr;
+          
+          // Always use cloud data if connected, even if empty, to ensure sync
+          if (prodData) {
+            const mappedProducts: Product[] = prodData.map((p: any) => ({
+              id: p.id, name: p.name, category: p.category, description: p.description, price: Number(p.price),
+              discountPrice: p.discount_price ? Number(p.discount_price) : undefined,
+              image: p.image, fileUrl: p.file_url, isPopular: p.is_popular
+            }));
+            setProducts(mappedProducts);
+            DataService.saveProducts(mappedProducts); // Force save local
+            setDebugDataCount(mappedProducts.length);
+          }
 
-      const { data: vouchData } = await supabase.from('vouchers').select('*');
-      if (vouchData) {
-        const mappedVouchers: Voucher[] = vouchData.map((v: any) => ({
-          id: v.id, code: v.code, type: v.type, value: Number(v.value), isActive: v.is_active
-        }));
-        setVouchers(mappedVouchers);
-        DataService.saveVouchers(mappedVouchers);
-      }
-      
-      const { data: affData } = await supabase.from('affiliates').select('*');
-      if (affData) {
-        const mappedAff: Affiliate[] = affData.map((a: any) => ({
-          id: a.id, name: a.name, code: a.code, password: a.password,
-          commissionRate: Number(a.commission_rate), totalEarnings: Number(a.total_earnings),
-          bankDetails: a.bank_details, isActive: a.is_active
-        }));
-        setAffiliates(mappedAff);
-        DataService.saveAffiliates(mappedAff);
-      }
+          const { data: vouchData, error: vouchErr } = await supabase.from('vouchers').select('*');
+          if (vouchErr) throw vouchErr;
+          if (vouchData) {
+            const mappedVouchers: Voucher[] = vouchData.map((v: any) => ({
+              id: v.id, code: v.code, type: v.type, value: Number(v.value), isActive: v.is_active
+            }));
+            setVouchers(mappedVouchers);
+            DataService.saveVouchers(mappedVouchers);
+          }
+          
+          const { data: affData, error: affErr } = await supabase.from('affiliates').select('*');
+          if (affErr) throw affErr;
+          if (affData) {
+            const mappedAff: Affiliate[] = affData.map((a: any) => ({
+              id: a.id, name: a.name, code: a.code, password: a.password,
+              commissionRate: Number(a.commission_rate), totalEarnings: Number(a.total_earnings),
+              bankDetails: a.bank_details, isActive: a.is_active
+            }));
+            setAffiliates(mappedAff);
+            DataService.saveAffiliates(mappedAff);
+          }
 
-      const { data: settingsData } = await supabase.from('store_settings').select('*').single();
-      if (settingsData) {
-         const newSettings: StoreSettings = {
-            ...settings, // Keep existing credentials if any
-            storeName: settingsData.store_name,
-            address: settingsData.address,
-            whatsapp: settingsData.whatsapp,
-            email: settingsData.email,
-            description: settingsData.description,
-            logoUrl: settingsData.logo_url,
-            tripayApiKey: settingsData.tripay_api_key,
-            tripayPrivateKey: settingsData.tripay_private_key,
-            tripayMerchantCode: settingsData.tripay_merchant_code
-         };
-         setSettings(newSettings);
-         DataService.saveSettings(newSettings);
-      }
+          const { data: settingsData } = await supabase.from('store_settings').select('*').single();
+          // No error throw here as settings might be empty initially
+          if (settingsData) {
+             const newSettings: StoreSettings = {
+                ...settings, // Keep existing credentials if any
+                storeName: settingsData.store_name,
+                address: settingsData.address,
+                whatsapp: settingsData.whatsapp,
+                email: settingsData.email,
+                description: settingsData.description,
+                logoUrl: settingsData.logo_url,
+                tripayApiKey: settingsData.tripay_api_key,
+                tripayPrivateKey: settingsData.tripay_private_key,
+                tripayMerchantCode: settingsData.tripay_merchant_code
+             };
+             setSettings(newSettings);
+             DataService.saveSettings(newSettings);
+          }
 
-      const { data: payData } = await supabase.from('payment_methods').select('*');
-      if (payData && payData.length > 0) {
-          const mappedPayments: PaymentMethod[] = payData.map((p: any) => ({
-              id: p.id, type: p.type, name: p.name, accountNumber: p.account_number,
-              accountName: p.account_name, description: p.description, logo: p.logo, isActive: p.is_active
-          }));
-          setPaymentMethods(mappedPayments);
-          DataService.savePayments(mappedPayments);
+          const { data: payData, error: payErr } = await supabase.from('payment_methods').select('*');
+          if (payErr) throw payErr;
+          if (payData && payData.length > 0) {
+              const mappedPayments: PaymentMethod[] = payData.map((p: any) => ({
+                  id: p.id, type: p.type, name: p.name, accountNumber: p.account_number,
+                  accountName: p.account_name, description: p.description, logo: p.logo, isActive: p.is_active
+              }));
+              setPaymentMethods(mappedPayments);
+              DataService.savePayments(mappedPayments);
+          }
+          
+          setIsCloudConnected(true);
+      } catch (err: any) {
+          console.error("Supabase Fetch Error:", err);
+          setFetchError(err.message || "Unknown error");
+          // If RLS error, user needs to run SQL schema
       }
-      
-      setIsCloudConnected(true);
     };
 
     fetchData();
@@ -1312,7 +1335,8 @@ export default function App() {
       supabase,
       isCloudConnected,
       debugDataCount,
-      resetLocalData
+      resetLocalData,
+      fetchError
     }}>
       <Router>
         <AppContent />

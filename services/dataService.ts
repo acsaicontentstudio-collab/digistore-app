@@ -23,11 +23,11 @@ const initialSettings: StoreSettings = {
 };
 
 const initialPayments: PaymentMethod[] = [
-  { id: '1', type: 'BANK', name: 'Bank BCA', accountNumber: '1234567890', accountName: 'Admin Store', logo: 'https://upload.wikimedia.org/wikipedia/commons/5/5c/Bank_Central_Asia.svg' },
-  { id: '2', type: 'BANK', name: 'Bank Mandiri', accountNumber: '0987654321', accountName: 'Admin Store', logo: 'https://upload.wikimedia.org/wikipedia/commons/a/ad/Bank_Mandiri_logo_2016.svg' },
-  { id: '3', type: 'E-WALLET', name: 'DANA', accountNumber: '081234567890', accountName: 'Admin Store', logo: 'https://upload.wikimedia.org/wikipedia/commons/7/72/Logo_dana_blue.svg' },
-  { id: '4', type: 'QRIS', name: 'QRIS Payment', accountNumber: 'N/A', accountName: 'DigiStore', description: 'Scan QR untuk membayar' },
-  { id: '5', type: 'TRIPAY', name: 'Tripay Automatis', description: 'Metode pembayaran otomatis' },
+  { id: '550e8400-e29b-41d4-a716-446655440010', type: 'BANK', name: 'Bank BCA', accountNumber: '1234567890', accountName: 'Admin Store', logo: 'https://upload.wikimedia.org/wikipedia/commons/5/5c/Bank_Central_Asia.svg', isActive: true },
+  { id: '550e8400-e29b-41d4-a716-446655440011', type: 'BANK', name: 'Bank Mandiri', accountNumber: '0987654321', accountName: 'Admin Store', logo: 'https://upload.wikimedia.org/wikipedia/commons/a/ad/Bank_Mandiri_logo_2016.svg', isActive: true },
+  { id: '550e8400-e29b-41d4-a716-446655440012', type: 'E-WALLET', name: 'DANA', accountNumber: '081234567890', accountName: 'Admin Store', logo: 'https://upload.wikimedia.org/wikipedia/commons/7/72/Logo_dana_blue.svg', isActive: true },
+  { id: '550e8400-e29b-41d4-a716-446655440013', type: 'QRIS', name: 'QRIS Payment', accountNumber: 'N/A', accountName: 'DigiStore', description: 'Scan QR untuk membayar', isActive: true },
+  { id: '550e8400-e29b-41d4-a716-446655440014', type: 'TRIPAY', name: 'Tripay Automatis', description: 'Metode pembayaran otomatis', isActive: true },
 ];
 
 const initialProducts: Product[] = [
